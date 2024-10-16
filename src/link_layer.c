@@ -35,7 +35,7 @@ int alarmCount = 0;
 void alarmHandler(int signal)
 {   
     printf("Alarm triggered!\n");
-    alarmEnabled = FALSE;
+    alarmEnabled = TRUE;
     alarmCount++;
 
     printf("Alarm #%d\n", alarmCount);
@@ -71,7 +71,7 @@ int llopen(LinkLayer connectionParameters){
             alarm(connectionParameters.timeout);
             alarmEnabled = FALSE;
 
-            while(alarmEnabled == FALSE){
+            while(alarmEnabled == FALSE && state != READ){
 
                 if (read(fd, &byte, 1) > 0){
                 switch (state)

@@ -21,11 +21,11 @@
 
 #define Awrite 0x03
 #define CSet 0x03
-#define BCC1w Awrite ^ CSet
+#define BCC1w (Awrite ^ CSet)
 
 #define Aread 0x01
 #define CUA 0x07
-#define BCC1r Aread ^ CUA
+#define BCC1r (Aread ^ CUA)
 
 int alarmEnabled = FALSE;
 int alarmCount = 0;
@@ -33,7 +33,8 @@ int alarmCount = 0;
 
 // Alarm function handler
 void alarmHandler(int signal)
-{
+{   
+    printf("Alarm triggered!\n");
     alarmEnabled = FALSE;
     alarmCount++;
 
@@ -112,7 +113,7 @@ int llopen(LinkLayer connectionParameters){
         if (state != READ) return -1;
         break;
     
-    case LlRx:
+    case LlRx: 
 
         while(state != READ){
 

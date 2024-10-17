@@ -81,18 +81,18 @@ int llopen(LinkLayer connectionParameters){
                     break;
                 
                 case FLAG1:
-                    if (byte == Awrite) state = A;
+                    if (byte == Aread) state = A;
                     else if(byte != FLAG) state = START;
                     break;
 
                 case A:
-                    if (byte == CSet) state = C;
+                    if (byte == CUA) state = C;
                     else if(byte == FLAG) state = FLAG1;
                     else state = START;
                     break;
 
                 case C:
-                    if (byte == (BCC1w)) state = BCC;
+                    if (byte == (BCC1r)) state = BCC;
                     else if(byte == FLAG) state = FLAG1;
                     else state = FLAG;
                     break;
@@ -125,18 +125,18 @@ int llopen(LinkLayer connectionParameters){
                     break;
                 
                 case FLAG1:
-                    if (byte == Aread) state = A;
+                    if (byte == Awrite) state = A;
                     else if(byte != FLAG) state = START;
                     break;
 
                 case A:
-                    if (byte == CUA) state = C;
+                    if (byte == CSet) state = C;
                     else if(byte == FLAG) state = FLAG1;
                     else state = START;
                     break;
 
                 case C:
-                    if (byte == (BCC1r)) state = BCC;
+                    if (byte == (BCC1w)) state = BCC;
                     else if(byte == FLAG) state = FLAG1;
                     else state = FLAG;
                     break;

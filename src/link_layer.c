@@ -169,8 +169,15 @@ int llopen(LinkLayer connectionParameters){
 ////////////////////////////////////////////////
 int llwrite(const unsigned char *buf, int bufSize)
 {
-    // TODO
+    int frameSize = bufSize + 6;
+    unsigned char *frame = (unsigned char*) malloc(frameSize);
+    frame[0] = FLAG;
+    frame[1] = Awrite;
+    frame[2] = 0x00; //TO DO
+    frame[3] = frame[1] ^ frame[2];
 
+
+    (void)signal(SIGALRM, alarmHandler);
     return 0;
 }
 

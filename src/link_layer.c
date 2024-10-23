@@ -27,8 +27,17 @@
 #define CUA 0x07
 #define BCC1r (Aread ^ CUA)
 
+#define MAX_FRAME_SIZE 512
+
+//destuffing
+#define ESCAPE_BYTE 0x7D
+#define STUFFING_MASK 0x20
+
 int alarmEnabled = FALSE;
 int alarmCount = 0;
+char bitTx = 0;
+int retransmissions = 0;
+int timeout = 3;
 
 
 // Alarm function handler
@@ -164,29 +173,194 @@ int llopen(LinkLayer connectionParameters){
     return fd;
 }
 
-////////////////////////////////////////////////
-// LLWRITE
-////////////////////////////////////////////////
-int llwrite(const unsigned char *buf, int bufSize)
+// -------- AUXILIARY TO LLWRITE 
+int byteStuffing(const unsigned char *frame, int frameSize, unsigned char *stuffedData){
+    int j = 0;
+    for (int i = 0; i < frameSize; i++) {
+        if (frame[i] == 0x7E) {
+            stuffedData[j] = 0x7D;
+            j++;
+            stuffedData[j] = 0x5E;
+            j++;
+        } 
+        else if (frame[i] == 0x7D) {
+            stuffedData[j] = 0x7D;
+            j++;
+            stuffedData[j] = 0x5D;
+            j++;
+        } 
+        else {
+            stuffedData[j] = frame[i];
+            j++;
+        }
+    }
+    return j;
+}
+
+//máquina de estados para ler o acknoldege frame    
+unsigned char readAckFrame(int fd){
+
+    unsigned char byte, cByte = 0;
+    LinkLayerState state = START;
+    
+    while (state != READ&& alarmEnabled == FALSE) {  
+        if (read(fd, &byte, 1) > 0 || 1) {
+            switch (state) {
+                case START:
+                    if (byte == FLAG) state = FLAG1;
+                    break;
+                case FLAG1:
+                    if (byte == Aread) state = A;
+                    else if (byte != FLAG) state = START;
+                    break;
+                case A:
+                    if (byte == 0xAA || byte == 0xAB || byte ==  0x54 || byte ==  0x55 || byte == 0x0B){ //basicamente só a checkar se o byte é mm o C
+                        state = C;
+                        cByte = byte;   
+                    }
+                    else if (byte == FLAG) state = FLAG1;
+                    else state = START;
+                    break;
+                case C:
+                    if (byte == (Awrite ^ cByte)) state = BCC;
+                    else if (byte == FLAG) state = FLAG1;
+                    else state = START;
+                    break;
+                case BCC:
+                    if (byte == FLAG){
+                        state = READ;
+                    }
+                    else state = START;
+                    break;
+                default: 
+                    break;
+            }
+        } 
+    } 
+    return cByte;
+}
+
+// Helper function to perform byte de-stuffing
+int byteDeStuffing(const unsigned char *stuffedData, int stuffedSize, unsigned char *dest) {
+    int j = 0;
+    for (int i = 0; i < stuffedSize; i++) {
+        if (stuffedData[i] == ESCAPE_BYTE) {
+            i++; // Skip to the next byte
+            dest[j++] = stuffedData[i] ^ STUFFING_MASK; // XOR the stuffed byte
+        } else {
+            dest[j++] = stuffedData[i]; // Regular byte, copy it directly
+        }
+    }
+    return j; // Return the size of the de-stuffed data
+}
+
+
+int llwrite(LinkLayer connectionParameters,const unsigned char *buf, int bufSize)
 {
+    int fd = openSerialPort(connectionParameters.serialPort,connectionParameters.baudRate);
+    if (fd < 0) return -1;
     int frameSize = bufSize + 6;
     unsigned char *frame = (unsigned char*) malloc(frameSize);
     frame[0] = FLAG;
     frame[1] = Awrite;
-    frame[2] = 0x00; //TO DO
+    frame[2] = bitTx << 7; //nao sei se é 6 ou 7 | later bitTx = (bitTx++)%2
     frame[3] = frame[1] ^ frame[2];
 
 
     (void)signal(SIGALRM, alarmHandler);
-    return 0;
+
+    
+    //Passa todos os bytes do buf para o frame (a partir do byte 4) 
+    for (int i = 0; i < bufSize; i++){
+        frame[i+4] = buf[i];
+    }
+
+    //calcula o bcc2
+    u_int8_t bcc2 = buf[0];
+    for(int i = 1; i< bufSize; i++){
+        bcc2 = bcc2 ^ buf[i];
+    }
+
+    //STUFFING (swapping 0x7E for 0x7D 0x5E and 0x7D for 0x7D 0x5D)
+    unsigned char stuffedFrame[MAX_PAYLOAD_SIZE*2 + 6];
+    int stuffedFrameSize = byteStuffing(frame+1, frameSize-2, stuffedFrame);
+
+    memcpy(frame, stuffedFrame, stuffedFrameSize+4);
+    frame[stuffedFrameSize+4] = bcc2;
+    frame[stuffedFrameSize+5] = FLAG;
+
+    int aceite = 0;
+    int rejeitado = 0;
+    int transmission = 0;
+    while (transmission < retransmissions){
+        alarmEnabled = FALSE;
+        alarm(timeout);
+        rejeitado = 0;
+        aceite = 0;
+
+        while (alarmEnabled == FALSE && rejeitado == 0 && aceite == 0){
+
+            write(fd, frame, stuffedFrameSize+6);
+            unsigned char check = readAckFrame(fd);
+
+            if (!check)
+                continue;
+            else if(check ==  0x54 || check == 0x55)
+                rejeitado = 1;
+            else if (check == 0xAA || check == 0xAB){
+                aceite = 1;
+                bitTx = (bitTx + 1)%2;
+            }
+            else continue;
+            
+        }
+        if (aceite) break;
+        transmission++;
+    }
+
+    free(frame);
+    if(aceite) return frameSize;
+    
+    else{
+        //FALTA FAZER CENAS PARA FECHAR
+        return -1;
+    }
 }
 
 ////////////////////////////////////////////////
 // LLREAD
 ////////////////////////////////////////////////
-int llread(unsigned char *packet)
+int llread(int fd, unsigned char *packet)
 {
-    // TODO
+    unsigned char frame[MAX_FRAME_SIZE]; // Buffer for the frame
+    int frameSize;
+
+    // Read the frame from the data link protocol
+    frameSize = read(fd, frame, sizeof(frame)); // fd is the file descriptor for the serial port
+
+    if (frameSize < 0) {
+        perror("Error reading frame");
+        return -1;
+    }
+
+    // Check for start and end flags (assuming FLAG is the start and end delimiter)
+    if (frame[0] != FLAG || frame[frameSize - 1] != FLAG) {
+        printf("Invalid frame received (missing flags)\n");
+        return -1;
+    }
+
+    // De-stuff the frame (excluding the flags)
+    int dataSize = byteDeStuffing(frame + 1, frameSize - 2, packet); // De-stuff between the flags
+
+    if (dataSize < 0) {
+        printf("Error during byte de-stuffing\n");
+        return -1;
+    }
+
+    // Optionally check for errors (e.g., CRC or parity checks can be added here)
+
+    // Return the size of the received packet (de-stuffed data)
+    return dataSize;
 
     return 0;
 }
@@ -201,3 +375,4 @@ int llclose(int showStatistics)
     int clstat = closeSerialPort();
     return clstat;
 }
+

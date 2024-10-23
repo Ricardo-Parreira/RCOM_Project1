@@ -22,4 +22,18 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         exit(-1);
     }
     else (printf("llopen() works\n"));
+
+    // Testing llwrite
+    if (linkLayer.role == LlTx) {
+        printf("Testing llwrite...\n");
+
+        const char *data = "Hello";
+        int bytesWritten = llwrite(linkLayer,(unsigned char*)data, strlen(data));
+
+        if (bytesWritten < 0) {
+            perror("llwrite failed");
+        } else {
+            printf("llwrite success: %d bytes written\n", bytesWritten);
+        }
+    }
 }

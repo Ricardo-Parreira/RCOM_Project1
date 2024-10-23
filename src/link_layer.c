@@ -32,7 +32,6 @@ int alarmCount = 0;
 char bitTx = 0;
 int retransmissions = 0;
 int timeout = 3;
-int fd = 0; //se der erro pode ser disto
 
 // Alarm function handler
 void alarmHandler(int signal)
@@ -55,7 +54,7 @@ int llopen(LinkLayer connectionParameters){
 
     LinkLayerState state = START;
 
-    fd = openSerialPort(connectionParameters.serialPort,connectionParameters.baudRate);
+    int fd = openSerialPort(connectionParameters.serialPort,connectionParameters.baudRate);
     if (fd < 0) return -1;
 
     retransmissions = connectionParameters.nRetransmissions;
@@ -172,8 +171,10 @@ int llopen(LinkLayer connectionParameters){
 ////////////////////////////////////////////////
 // LLWRITE
 ////////////////////////////////////////////////
-int llwrite(const unsigned char *buf, int bufSize)
+int llwrite(LinkLayer connectionParameters,const unsigned char *buf, int bufSize)
 {
+    int fd = openSerialPort(connectionParameters.serialPort,connectionParameters.baudRate);
+    if (fd < 0) return -1;
     int frameSize = bufSize + 6;
     unsigned char *frame = (unsigned char*) malloc(frameSize);
     frame[0] = FLAG;
@@ -197,8 +198,8 @@ int llwrite(const unsigned char *buf, int bufSize)
     }
 
     //STUFFING (swapping 0x7E for 0x7D 0x5E and 0x7D for 0x7D 0x5D)
-    unsigned char *stuffedFrame[MAX_PAYLOAD_SIZE*2 + 6];
-    int stuffedFrameSize = byteStuffing(frame+1, frameSize-2, &stuffedFrame);
+    unsigned char stuffedFrame[MAX_PAYLOAD_SIZE*2 + 6];
+    int stuffedFrameSize = byteStuffing(frame+1, frameSize-2, stuffedFrame);
 
     memcpy(frame, stuffedFrame, stuffedFrameSize+4);
     frame[stuffedFrameSize+4] = bcc2;
@@ -246,19 +247,23 @@ int llwrite(const unsigned char *buf, int bufSize)
 // -------- AUXILIARY TO LLWRITE 
 int byteStuffing(const unsigned char *frame, int frameSize, unsigned char *stuffedData){
     int j = 0;
-    for (int i = 0; i < frameSize; i++){
-        if (frame[i] == 0x7E){
-            stuffedData[j]=0x7D;
+    for (int i = 0; i < frameSize; i++) {
+        if (frame[i] == 0x7E) {
+            stuffedData[j] = 0x7D;
             j++;
-            stuffedData[j]=0x5E;
-        }
-        if (frame[i] == 0x7D){
-            stuffedData[j]=0x7D;
+            stuffedData[j] = 0x5E;
             j++;
-            stuffedData[j]=0x5D;
+        } 
+        else if (frame[i] == 0x7D) {
+            stuffedData[j] = 0x7D;
+            j++;
+            stuffedData[j] = 0x5D;
+            j++;
+        } 
+        else {
+            stuffedData[j] = frame[i];
+            j++;
         }
-        j++;
-            
     }
     return j;
 }
@@ -275,7 +280,7 @@ unsigned char readAckFrame(int fd){
                 case START:
                     if (byte == FLAG) state = FLAG1;
                     break;
-                case FLAG:
+                case FLAG1:
                     if (byte == Aread) state = A;
                     else if (byte != FLAG) state = START;
                     break;
@@ -284,12 +289,12 @@ unsigned char readAckFrame(int fd){
                         state = C;
                         cByte = byte;   
                     }
-                    else if (byte == FLAG) state = FLAG;
+                    else if (byte == FLAG) state = FLAG1;
                     else state = START;
                     break;
                 case C:
                     if (byte == (Awrite ^ cByte)) state = BCC;
-                    else if (byte == FLAG) state = FLAG;
+                    else if (byte == FLAG) state = FLAG1;
                     else state = START;
                     break;
                 case BCC:
@@ -323,7 +328,9 @@ int llread(unsigned char *packet)
 int llclose(int showStatistics)
 {
     // TODO
+    /*
+    int clstat = closeSerialPort(fd);
+    return clstat;*/
 
-    int clstat = closeSerialPort();
-    return clstat;
+    return 1;
 }

@@ -12,8 +12,15 @@ typedef enum
     C,
     BCC,
     FLAG2,
-    READ
+    READ,
+    FLAG_RCV,
+    A_RCV,
+    C_RCV,
+    BCC1_OK,
+    DATA,
+    STOP
 } LinkLayerState;
+
 
 typedef enum
 {
@@ -33,7 +40,7 @@ typedef struct
 // SIZE of maximum acceptable payload.
 // Maximum number of bytes that application layer should send to link layer
 #define MAX_PAYLOAD_SIZE 256
-//isto é o mesmo que isto?????
+
 #define MAX_FRAME_SIZE 512
 
 // MISC
@@ -59,6 +66,7 @@ int llclose(int showStatistics);
 
 // Additional helper functions
 int byteStuffing(const unsigned char *frame, int frameSize, unsigned char *stuffedData);
+int byteDeStuffing(const unsigned char *stuffedData, int stuffedSize, unsigned char *dest);
 unsigned char readAckFrame(int fd);
 
 #endif // _LINK_LAYER_H_

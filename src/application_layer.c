@@ -23,6 +23,8 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     }
     else (printf("llopen() works\n"));
 
+
+    /*
     // Testing llwrite
     if (linkLayer.role == LlTx) {
         printf("Testing llwrite...\n");
@@ -52,6 +54,17 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             printf("llread success: %d bytes read\n", bytesRead);
             printf("Received data: %s\n", packet);  // Assuming it's a string, for simplicity
         }
+    }
+    */
+
+   // Testing llclose
+    printf("Testing llclose...\n");
+    int closeResult = llclose(linkLayer, 0);  // Call llclose with showStatistics = 0
+
+    if (closeResult == 0) {
+        printf("llclose test passed: Connection closed successfully.\n");
+    } else {
+        printf("llclose test failed: Connection did not close successfully.\n");
     }
 
 

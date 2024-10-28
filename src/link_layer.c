@@ -176,6 +176,7 @@ int llopen(LinkLayer connectionParameters){
     return fd;
 }
 
+/*
 // -------- AUXILIARY TO LLWRITE 
 int byteStuffing(const unsigned char *frame, int frameSize, unsigned char *stuffedData){
     int j = 0;
@@ -420,11 +421,9 @@ int llread(int fd, unsigned char *packet)
 
     // Return the size of the de-stuffed data excluding the BCC2 byte
     return deStuffedSize - 1;
-}
+}*/
 
-////////////////////////////////////////////////
-// LLCLOSE
-////////////////////////////////////////////////
+
 ////////////////////////////////////////////////
 // LLCLOSE
 ////////////////////////////////////////////////

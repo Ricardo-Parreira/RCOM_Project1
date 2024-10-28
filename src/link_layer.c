@@ -33,6 +33,7 @@
 #define ESCAPE_BYTE 0x7D
 #define STUFFING_MASK 0x20
 
+extern int fd;
 int alarmEnabled = FALSE;
 int alarmCount = 0;
 char bitTx = 0;
@@ -61,7 +62,7 @@ int llopen(LinkLayer connectionParameters){
 
     LinkLayerState state = START;
 
-    int fd = openSerialPort(connectionParameters.serialPort,connectionParameters.baudRate);
+    fd = openSerialPort(connectionParameters.serialPort,connectionParameters.baudRate);
     if (fd < 0) return -1;
 
 
@@ -264,8 +265,8 @@ int byteDeStuffing(const unsigned char *stuffedData, int stuffedSize, unsigned c
 
 int llwrite(LinkLayer connectionParameters,const unsigned char *buf, int bufSize)
 {
-    int fd = openSerialPort(connectionParameters.serialPort,connectionParameters.baudRate);
-    if (fd < 0) return -1;
+    //int fd = openSerialPort(connectionParameters.serialPort,connectionParameters.baudRate);
+    //if (fd < 0) return -1;
     int frameSize = bufSize + 6;
     unsigned char *frame = (unsigned char*) malloc(frameSize);
     frame[0] = FLAG;
@@ -292,7 +293,7 @@ int llwrite(LinkLayer connectionParameters,const unsigned char *buf, int bufSize
     unsigned char stuffedFrame[MAX_PAYLOAD_SIZE*2 + 6];
     int stuffedFrameSize = byteStuffing(frame+1, frameSize-2, stuffedFrame);
 
-    memcpy(frame, stuffedFrame, stuffedFrameSize+4);
+    memcpy(frame + 4, stuffedFrame, stuffedFrameSize);
     frame[stuffedFrameSize+4] = bcc2;
     frame[stuffedFrameSize+5] = FLAG;
 

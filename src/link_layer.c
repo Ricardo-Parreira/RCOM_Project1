@@ -33,6 +33,9 @@
 #define ESCAPE_BYTE 0x7D
 #define STUFFING_MASK 0x20
 
+//disconnect
+#define  DISC 0x0B
+
 int alarmEnabled = FALSE;
 int alarmCount = 0;
 char bitTx = 0;
@@ -422,10 +425,159 @@ int llread(int fd, unsigned char *packet)
 ////////////////////////////////////////////////
 // LLCLOSE
 ////////////////////////////////////////////////
-int llclose(int showStatistics)
-{
-    // TODO
+////////////////////////////////////////////////
+// LLCLOSE
+////////////////////////////////////////////////
+int llclose(LinkLayer connectionParameters, int showStatistics) {
+    LinkLayerState state = START;
+    unsigned char byte;
+    int fd = openSerialPort(connectionParameters.serialPort, connectionParameters.baudRate);
+    if (fd < 0) return -1;
 
+    if (showStatistics) {
+        printf("Statistics:  Retransmissions: %d, Timeouts: %d\n", retransmissions, alarmCount);
+    }
+
+    (void)signal(SIGALRM, alarmHandler);
+
+    if (connectionParameters.role == LlTx) {
+        // Transmitter side
+        unsigned char discFrame[5] = {FLAG, Awrite, DISC, Awrite ^ DISC, FLAG};
+
+        int transmission = 0;
+        while (transmission < retransmissions) {
+            write(fd, discFrame, 5); // Send DISC frame
+            alarmEnabled = FALSE;
+            alarm(timeout);
+
+            // Wait for DISC from Receiver
+            while (state != READ && !alarmEnabled) {
+                if (read(fd, &byte, 1) > 0) {
+                    switch (state) {
+                        case START:
+                            if (byte == FLAG) state = FLAG_RCV;
+                            break;
+                        case FLAG_RCV:
+                            if (byte == Aread) state = A_RCV;
+                            else if (byte != FLAG) state = START;
+                            break;
+                        case A_RCV:
+                            if (byte == DISC) state = C_RCV;
+                            else if (byte != FLAG) state = START;
+                            break;
+                        case C_RCV:
+                            if (byte == (Aread ^ DISC)) state = BCC1_OK;
+                            else if (byte != FLAG) state = START;
+                            break;
+                        case BCC1_OK:
+                            if (byte == FLAG) state = READ;
+                            else state = START;
+                            break;
+                        default:
+                            break;
+                    }
+                }
+            }
+
+            if (state == READ) break; // DISC received, exit retransmission loop
+            transmission++;
+        }
+
+        if (state != READ) return -1; // Failed to receive DISC from Receiver
+
+        // Send UA frame
+        unsigned char uaFrame[5] = {FLAG, Aread, CUA, Aread ^ CUA, FLAG};
+        write(fd, uaFrame, 5);
+
+    } else {
+        // Receiver side
+        int transmission = 0;
+        while (state != READ && transmission < retransmissions) {
+            alarmEnabled = FALSE;
+            alarm(timeout);
+
+            // Wait for DISC from Transmitter
+            while (state != READ && !alarmEnabled) {
+                if (read(fd, &byte, 1) > 0) {
+                    switch (state) {
+                        case START:
+                            if (byte == FLAG) state = FLAG_RCV;
+                            break;
+                        case FLAG_RCV:
+                            if (byte == Awrite) state = A_RCV;
+                            else if (byte != FLAG) state = START;
+                            break;
+                        case A_RCV:
+                            if (byte == DISC) state = C_RCV;
+                            else if (byte != FLAG) state = START;
+                            break;
+                        case C_RCV:
+                            if (byte == (Awrite ^ DISC)) state = BCC1_OK;
+                            else if (byte != FLAG) state = START;
+                            break;
+                        case BCC1_OK:
+                            if (byte == FLAG) state = READ;
+                            else state = START;
+                            break;
+                        default:
+                            break;
+                    }
+                }
+            }
+
+            if (state == READ) break; // DISC received, exit retransmission loop
+            transmission++;
+        }
+
+        if (state != READ) return -1; // Failed to receive DISC from Transmitter
+
+        // Send DISC frame to Transmitter
+        unsigned char discFrame[5] = {FLAG, Aread, DISC, Aread ^ DISC, FLAG};
+        write(fd, discFrame, 5);
+
+        // Wait for UA frame from Transmitter
+        state = START;
+        transmission = 0;
+        while (state != READ && transmission < retransmissions) {
+            alarmEnabled = FALSE;
+            alarm(timeout);
+
+            while (state != READ && !alarmEnabled) {
+                if (read(fd, &byte, 1) > 0) {
+                    switch (state) {
+                        case START:
+                            if (byte == FLAG) state = FLAG_RCV;
+                            break;
+                        case FLAG_RCV:
+                            if (byte == Awrite) state = A_RCV;
+                            else if (byte != FLAG) state = START;
+                            break;
+                        case A_RCV:
+                            if (byte == CUA) state = C_RCV;
+                            else if (byte != FLAG) state = START;
+                            break;
+                        case C_RCV:
+                            if (byte == (Awrite ^ CUA)) state = BCC1_OK;
+                            else if (byte != FLAG) state = START;
+                            break;
+                        case BCC1_OK:
+                            if (byte == FLAG) state = READ;
+                            else state = START;
+                            break;
+                        default:
+                            break;
+                    }
+                }
+            }
+
+            if (state == READ) break; // UA received, exit retransmission loop
+            transmission++;
+        }
+
+        if (state != READ) return -1; // Failed to receive UA from Transmitter
+    }
+
+    // Close the serial port and reset terminal settings
     int clstat = closeSerialPort();
     return clstat;
 }

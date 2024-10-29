@@ -16,7 +16,7 @@
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
 
-#define BUF_SIZE 6
+
 
 #define FLAG 0x7E
 
@@ -24,9 +24,13 @@
 #define CSet 0x03
 #define BCC1w (Awrite ^ CSet)
 
+//disconnect 
+#define DISC 0x0B
+
 #define Aread 0x01
 #define CUA 0x07
 #define BCC1r (Aread ^ CUA)
+#define BCC1_DISC (Awrite ^ DISC)
 
 #define MAX_FRAME_SIZE 512
 
@@ -34,9 +38,13 @@
 #define ESCAPE_BYTE 0x7D
 #define STUFFING_MASK 0x20
 
+
+
+LinkLayerRole role;
 extern int fd;
-int alarmEnabled = FALSE;
+int alarmEnabled = 0;
 int alarmCount = 0;
+
 char bitTx = 0;
 int retransmissions = 0;
 int timeout = 3;
@@ -46,10 +54,17 @@ int timeout = 3;
 void alarmHandler(int signal)
 {   
     printf("Alarm triggered!\n");
-    alarmEnabled = TRUE;
+    alarmEnabled = 1;//TRUE;
     alarmCount++;
 
     printf("Alarm #%d\n", alarmCount);
+}
+
+void setConnectionParameters(LinkLayer connectionParameters) {
+    timeout = connectionParameters.timeout;
+    retransmissions = connectionParameters.nRetransmissions;
+    role = connectionParameters.role;
+    fd = openSerialPort(connectionParameters.serialPort, connectionParameters.baudRate);
 }
 
 ////////////////////////////////////////////////
@@ -60,120 +75,80 @@ void alarmHandler(int signal)
 unsigned char byte;
 
 int llopen(LinkLayer connectionParameters){
+    alarmCount=0;
 
     LinkLayerState state = START;
 
-    fd = openSerialPort(connectionParameters.serialPort,connectionParameters.baudRate);
     if (fd < 0) return -1;
 
+    // Configure signal handler for retransmission
+    signal(SIGALRM, alarmHandler);
+    
 
-    switch (connectionParameters.role)
-    {
-    case LlTx:
-        (void)signal(SIGALRM, alarmHandler);
-
-        retransmissions = connectionParameters.nRetransmissions;
-        while(connectionParameters.nRetransmissions != 0){
-
-            //Send the supervision frame
+    // Role-based behavior
+    if (role == LlTx) {
+        while (retransmissions > 0) {
             unsigned char supFrame[5] = {FLAG, Awrite, CSet, BCC1w, FLAG};
             write(fd, supFrame, 5);
-            
-            
-            alarm(connectionParameters.timeout);
-            alarmEnabled = FALSE;
+            alarm(timeout);
+            alarmEnabled = 0;
 
-            while(alarmEnabled == FALSE && state != READ){
-
-                if (read(fd, &byte, 1) > 0){
-                switch (state)
-                {
-                case START:
-                    if (byte == FLAG) state = FLAG1;
-                    break;
-                
-                case FLAG1:
-                    if (byte == Aread) state = A;
-                    else if(byte != FLAG) state = START;
-                    break;
-
-                case A:
-                    if (byte == CUA) state = C;
-                    else if(byte == FLAG) state = FLAG1;
-                    else state = START;
-                    break;
-
-                case C:
-                    if (byte == (BCC1r)) state = BCC;
-                    else if(byte == FLAG) state = FLAG1;
-                    else state = FLAG;
-                    break;
-
-                case BCC:
-                    if (byte == FLAG) state = READ;
-                    else if(byte != (BCC1w)) state = START;
-                    break;
-                
-                default:
-                    break;
-                }
+            while (!alarmEnabled && state != READ) {
+                if (read(fd, &byte, 1) > 0) {
+                    switch (state) {
+                        case START:
+                            state = (byte == FLAG) ? FLAG_RCV : START;
+                            break;
+                        case FLAG_RCV:
+                            state = (byte == Aread) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
+                            break;
+                        case A_RCV:
+                            state = (byte == CUA) ? C_RCV : (byte == FLAG ? FLAG_RCV : START);
+                            break;
+                        case C_RCV:
+                            state = (byte == BCC1r) ? BCC1_OK : START;
+                            break;
+                        case BCC1_OK:
+                            state = (byte == FLAG) ? READ : START;
+                            break;
+                        default:
+                            break;
+                    }
                 }
             }
-            connectionParameters.nRetransmissions --;
+            if (state == READ) return fd;
+            retransmissions--;
         }
-
-        if (state != READ) return -1;
-        break;
-    
-    case LlRx: 
-
-        while(state != READ){
-
-                if (read(fd, &byte, 1) > 0){
-                switch (state)
-                {
-                case START:
-                    if (byte == FLAG) state = FLAG1;
-                    break;
-                
-                case FLAG1:
-                    if (byte == Awrite) state = A;
-                    else if(byte != FLAG) state = START;
-                    break;
-
-                case A:
-                    if (byte == CSet) state = C;
-                    else if(byte == FLAG) state = FLAG1;
-                    else state = START;
-                    break;
-
-                case C:
-                    if (byte == (BCC1w)) state = BCC;
-                    else if(byte == FLAG) state = FLAG1;
-                    else state = FLAG;
-                    break;
-
-                case BCC:
-                    if (byte == FLAG) state = READ;
-                    else state = START;
-                    break;
-                
-                default:
-                    break;
+        return -1;  // Failed to connect as transmitter
+    } else if (role == LlRx) {
+        while (state != READ) {
+            if (read(fd, &byte, 1) > 0) {
+                switch (state) {
+                    case START:
+                        state = (byte == FLAG) ? FLAG_RCV : START;
+                        break;
+                    case FLAG_RCV:
+                        state = (byte == Awrite) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
+                        break;
+                    case A_RCV:
+                        state = (byte == CSet) ? C_RCV : (byte == FLAG ? FLAG_RCV : START);
+                        break;
+                    case C_RCV:
+                        state = (byte == BCC1w) ? BCC1_OK : START;
+                        break;
+                    case BCC1_OK:
+                        state = (byte == FLAG) ? READ : START;
+                        break;
+                    default:
+                        break;
                 }
             }
         }
-        //Send the supervision frame
         unsigned char supFrame[5] = {FLAG, Aread, CUA, BCC1r, FLAG};
         write(fd, supFrame, 5);
-        break;
-
-    default:
-        return -1;
-        break;
+        return fd;
     }
-
-    return fd;
+    return -1;
 }
 
 // -------- AUXILIARY TO LLWRITE 
@@ -207,44 +182,53 @@ unsigned char readAckFrame(int fd){
     LinkLayerState state = START;
     
     while (state != READ && alarmEnabled == FALSE) {  
-        if (read(fd, &byte, 1) > 0 ) { // || 1
- 
+        if (read(fd, &byte, 1) > 0) {
             switch (state) {
                 case START:
-                    //printf("byte: %d\n", byte);
-                    if (byte == FLAG) state = FLAG1;
+                    if (byte == FLAG) state = FLAG_RCV;
                     break;
-                case FLAG1:
-                    //printf("byte: %d\n", byte);
-                    if (byte == Aread){ state = A;}
+
+                case FLAG_RCV:
+                    if (byte == Aread) state = A_RCV;
                     else if (byte != FLAG) state = START;
                     break;
-                case A:
-                    if (byte == 0xAA || byte == 0xAB || byte ==  0x54 || byte ==  0x55 || byte == 0x0B){ //basicamente só a checkar se o byte é mm o C
-                        state = C;
-                        cByte = byte;
 
+                case A_RCV:
+                    if (byte == 0xAA || byte == 0xAB || byte == 0x54 || byte == 0x55 || byte == DISC) {
+                        state = C_RCV;
+                        cByte = byte; // Store the control byte
+                    } else if (byte == FLAG) {
+                        state = FLAG_RCV;
+                    } else {
+                        state = START;
                     }
-                    else if (byte == FLAG) state = FLAG1;
-                    else state = START;
                     break;
-                case C:
-                    if (byte == (Awrite ^ cByte)) state = BCC;
-                    else if (byte == FLAG) state = FLAG1;
-                    else state = START;
+
+                case C_RCV:
+                    if (byte == (Awrite ^ cByte)) {
+                        state = BCC1_OK;
+                    } else if (byte == FLAG) {
+                        state = FLAG_RCV;
+                    } else {
+                        state = START;
+                    }
                     break;
-                case BCC:
-                    if (byte == FLAG){
+
+                case BCC1_OK:
+                    if (byte == FLAG) {
                         state = READ;
+                    } else {
+                        state = START;
                     }
-                    else state = START;
                     break;
-                default: 
+
+                default:
                     break;
             }
-        } 
-    } 
-    return cByte;
+        }
+    }
+
+    return (state == READ) ? cByte : 0;
 }
 
 // Helper function to perform byte de-stuffing
@@ -269,19 +253,20 @@ int byteDeStuffing(const unsigned char *stuffedData, int stuffedSize, unsigned c
 }
 
 
-int llwrite(LinkLayer connectionParameters,const unsigned char *buf, int bufSize)
+int llwrite(const unsigned char *buf, int bufSize)
 {
+    unsigned char frame[MAX_FRAME_SIZE];
     //int fd = openSerialPort(connectionParameters.serialPort,connectionParameters.baudRate);
     //if (fd < 0) return -1;
     int frameSize = bufSize + 6;
-    unsigned char *frame = (unsigned char*) malloc(frameSize);
+    //unsigned char *frame = (unsigned char*) malloc(frameSize);
     frame[0] = FLAG;
     frame[1] = Awrite;
     frame[2] = bitTx << 7; //nao sei se é 6 ou 7 | later bitTx = (bitTx++)%2
     frame[3] = frame[1] ^ frame[2];
 
 
-    (void)signal(SIGALRM, alarmHandler);
+    signal(SIGALRM, alarmHandler);
 
     
     //Passa todos os bytes do buf para o frame (a partir do byte 4) 
@@ -306,58 +291,60 @@ int llwrite(LinkLayer connectionParameters,const unsigned char *buf, int bufSize
     int aceite = 0;
     int rejeitado = 0;
     int transmission = 0;
-    retransmissions = connectionParameters.nRetransmissions;
-    while (transmission < retransmissions){
-        //printf("nao skippei");
+    
+    while (transmission < retransmissions) {
         alarmEnabled = FALSE;
         alarm(timeout);
-        rejeitado = 0;
         aceite = 0;
+        rejeitado = 0;
 
-        while (alarmEnabled == FALSE && rejeitado == 0 && aceite == 0){
-
-            write(fd, frame, stuffedFrameSize+6);
+        while (!alarmEnabled && !rejeitado && !aceite) {
+            write(fd, frame, stuffedFrameSize + 6);
             unsigned char check = readAckFrame(fd);
-             printf("check: %d\n", check);
 
-            if (!check)
+            if (!check) {
                 continue;
-            else if(check ==  0x54 || check == 0x55)
+            } else if (check == 0x54 || check == 0x55) {
                 rejeitado = 1;
-                 
-            else if (check == 0xAA || check == 0xAB){
+            } else if (check == 0xAA || check == 0xAB) {
                 aceite = 1;
-                bitTx = (bitTx + 1)%2;
+                bitTx = (bitTx + 1) % 2;
+            } else {
+                continue;
             }
-            else continue;
-            
         }
         if (aceite) break;
         transmission++;
     }
 
-    free(frame);
-    /*printf("AlarmEnabled: %d\n", alarmEnabled);
-    printf("rejeitado: %d\n", rejeitado);
-    printf("aceite: %d\n", aceite);
-    printf("frameSize: %d\n", frameSize);*/
+    //free(frame);
+
+    if (aceite) return frameSize;
     
-    if(aceite) return frameSize;  
-    
-    //FALTA FAZER CENAS PARA FECHAR
-    return -1;
-    
+    printf("Sending frame: ");
+    for (int i = 0; i < bufSize; i++) {
+        printf("%02X ", frame[i]);
+    }
+    printf("\n");
+
+    int bytesWritten = write(fd, frame, bufSize);
+    if (bytesWritten < 0) {
+        perror("Write error");
+        return -1;
+    }
+    return bytesWritten;  // Return number of bytes written
 }
 
 ////////////////////////////////////////////////
 // LLREAD
 ////////////////////////////////////////////////
-int llread(int fd, unsigned char *packet)
+int llread(unsigned char *packet)
 {
     unsigned char frame[MAX_FRAME_SIZE];
     LinkLayerState state = START;
     unsigned char byte;
     int dataIndex = 0;
+    
 
     while (state != STOP) {
         if (read(fd, &byte, 1) > 0) {
@@ -389,11 +376,6 @@ int llread(int fd, unsigned char *packet)
                     frame[dataIndex++] = byte;
                 }
                 break;
-            case FLAG1:
-            case A:
-            case C:
-            case BCC:
-            case FLAG2:
             case READ:
             case DATA:
             case STOP:
@@ -437,10 +419,155 @@ int llread(int fd, unsigned char *packet)
 ////////////////////////////////////////////////
 // LLCLOSE
 ////////////////////////////////////////////////
-int llclose(int showStatistics)
-{
-    // TODO
+int llclose(int showStatistics) {
+    LinkLayerState state = START;
+    unsigned char byte;
+    alarmCount = 0;
+    int disconnectAttempt = retransmissions;
 
-    int clstat = closeSerialPort();
-    return clstat;
+    // Check if role is correctly defined
+    if (role == LlTx) {
+        printf("Transmitter: Initiating DISC frame send sequence.\n");
+
+        // Loop to send DISC and wait for DISC from receiver
+        while (disconnectAttempt > 0) {
+            unsigned char discFrame[5] = {FLAG, Awrite, DISC, BCC1_DISC, FLAG};
+            if (write(fd, discFrame, 5) < 0) {
+                perror("Failed to write DISC frame");
+                return -1;
+            }
+            printf("Transmitter: DISC frame sent, awaiting response.\n");
+
+            alarm(timeout);
+            alarmEnabled = 0;
+            state = START;
+
+            // Wait for DISC response from receiver
+            while (!alarmEnabled && state != READ) {
+                if (read(fd, &byte, 1) > 0) {
+                    switch (state) {
+                        case START:
+                            state = (byte == FLAG) ? FLAG_RCV : START;
+                            break;
+                        case FLAG_RCV:
+                            state = (byte == Aread) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
+                            break;
+                        case A_RCV:
+                            state = (byte == DISC) ? C_RCV : (byte == FLAG ? FLAG_RCV : START);
+                            break;
+                        case C_RCV:
+                            state = (byte == BCC1_DISC) ? BCC1_OK : START;
+                            break;
+                        case BCC1_OK:
+                            state = (byte == FLAG) ? READ : START;
+                            break;
+                        default:
+                            break;
+                    }
+                }
+            }
+
+            if (state == READ) {
+                printf("Transmitter: DISC received from receiver.\n");
+                break; // Exit loop on successful DISC reception
+            }
+            disconnectAttempt--;
+        }
+
+        if (state == READ) {
+            unsigned char uaFrame[5] = {FLAG, Aread, CUA, BCC1r, FLAG};
+            if (write(fd, uaFrame, 5) < 0) {
+                perror("Failed to write UA frame");
+                return -1;
+            }
+            printf("Transmitter: UA frame sent, disconnection confirmed.\n");
+            if (showStatistics) {
+                printf("Statistics - Retransmissions: %d, Alarms: %d\n", retransmissions - disconnectAttempt, alarmCount);
+            }
+            
+        } else {
+            printf("Transmitter: DISC response not received. Disconnection failed.\n");
+            return -1;
+        }
+
+    } else if (role == LlRx) {
+        printf("Receiver: Waiting for DISC from transmitter.\n");
+
+        // Wait to receive DISC from transmitter
+        while (state != READ) {
+            if (read(fd, &byte, 1) > 0) {
+                switch (state) {
+                    case START:
+                        state = (byte == FLAG) ? FLAG_RCV : START;
+                        break;
+                    case FLAG_RCV:
+                        state = (byte == Awrite) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
+                        break;
+                    case A_RCV:
+                        state = (byte == DISC) ? C_RCV : (byte == FLAG ? FLAG_RCV : START);
+                        break;
+                    case C_RCV:
+                        state = (byte == BCC1_DISC) ? BCC1_OK : START;
+                        break;
+                    case BCC1_OK:
+                        state = (byte == FLAG) ? READ : START;
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+        printf("Receiver: DISC frame received from transmitter.\n");
+
+        // Send DISC back to the transmitter
+        unsigned char discFrame[5] = {FLAG, Aread, DISC, BCC1_DISC, FLAG};
+        if (write(fd, discFrame, 5) < 0) {
+            perror("Failed to write DISC frame back");
+            return -1;
+        }
+        printf("Receiver: DISC frame sent back to transmitter.\n");
+
+        // Wait for UA from transmitter
+        alarm(timeout);
+        alarmEnabled = 0;
+        state = START;
+
+        while (!alarmEnabled && state != READ) {
+            if (read(fd, &byte, 1) > 0) {
+                switch (state) {
+                    case START:
+                        state = (byte == FLAG) ? FLAG_RCV : START;
+                        break;
+                    case FLAG_RCV:
+                        state = (byte == Awrite) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
+                        break;
+                    case A_RCV:
+                        state = (byte == CUA) ? C_RCV : (byte == FLAG ? FLAG_RCV : START);
+                        break;
+                    case C_RCV:
+                        state = (byte == BCC1r) ? BCC1_OK : START;
+                        break;
+                    case BCC1_OK:
+                        state = (byte == FLAG) ? READ : START;
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+
+        if (state == READ) {
+            printf("Receiver: UA frame received, disconnection confirmed.\n");
+            if (showStatistics) {
+                printf("Statistics - Retransmissions: %d, Alarms: %d\n", retransmissions - disconnectAttempt, alarmCount);
+            }
+            return 1;
+        } else {
+            printf("Receiver: UA not received. Disconnection failed.\n");
+            return -1;
+        }
+    }
+
+    printf("Invalid role specified for llclose().\n");
+    return -1;
 }

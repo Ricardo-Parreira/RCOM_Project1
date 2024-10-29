@@ -78,6 +78,7 @@ int llopen(LinkLayer connectionParameters){
     alarmCount=0;
 
     LinkLayerState state = START;
+    setConnectionParameters(connectionParameters);
 
     if (fd < 0) return -1;
 
@@ -423,26 +424,18 @@ int llclose(int showStatistics) {
     LinkLayerState state = START;
     unsigned char byte;
     alarmCount = 0;
-    int disconnectAttempt = retransmissions;
+    
 
-    // Check if role is correctly defined
-    if (role == LlTx) {
-        printf("Transmitter: Initiating DISC frame send sequence.\n");
-
-        // Loop to send DISC and wait for DISC from receiver
-        while (disconnectAttempt > 0) {
+    if (role == LlTx) {  // Transmitter (Tx)
+        int retries = retransmissions;
+        while (retries > 0) {
+            // send frame DISC
             unsigned char discFrame[5] = {FLAG, Awrite, DISC, BCC1_DISC, FLAG};
-            if (write(fd, discFrame, 5) < 0) {
-                perror("Failed to write DISC frame");
-                return -1;
-            }
-            printf("Transmitter: DISC frame sent, awaiting response.\n");
-
+            write(fd, discFrame, 5);
             alarm(timeout);
             alarmEnabled = 0;
-            state = START;
 
-            // Wait for DISC response from receiver
+            // waiting for UA from Rx
             while (!alarmEnabled && state != READ) {
                 if (read(fd, &byte, 1) > 0) {
                     switch (state) {
@@ -453,10 +446,10 @@ int llclose(int showStatistics) {
                             state = (byte == Aread) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
                             break;
                         case A_RCV:
-                            state = (byte == DISC) ? C_RCV : (byte == FLAG ? FLAG_RCV : START);
+                            state = (byte == CUA) ? C_RCV : START;
                             break;
                         case C_RCV:
-                            state = (byte == BCC1_DISC) ? BCC1_OK : START;
+                            state = (byte == BCC1r) ? BCC1_OK : START;
                             break;
                         case BCC1_OK:
                             state = (byte == FLAG) ? READ : START;
@@ -466,34 +459,18 @@ int llclose(int showStatistics) {
                     }
                 }
             }
-
             if (state == READ) {
-                printf("Transmitter: DISC received from receiver.\n");
-                break; // Exit loop on successful DISC reception
+                close(fd);
+                if (showStatistics) {
+                    printf("Connection closed successfully. Statistics: Retransmissions: %d, Alarms: %d\n", retransmissions, alarmCount);
+                }
+                return 1;
             }
-            disconnectAttempt--;
+            retries--;
         }
-
-        if (state == READ) {
-            unsigned char uaFrame[5] = {FLAG, Aread, CUA, BCC1r, FLAG};
-            if (write(fd, uaFrame, 5) < 0) {
-                perror("Failed to write UA frame");
-                return -1;
-            }
-            printf("Transmitter: UA frame sent, disconnection confirmed.\n");
-            if (showStatistics) {
-                printf("Statistics - Retransmissions: %d, Alarms: %d\n", retransmissions - disconnectAttempt, alarmCount);
-            }
-            
-        } else {
-            printf("Transmitter: DISC response not received. Disconnection failed.\n");
-            return -1;
-        }
-
-    } else if (role == LlRx) {
-        printf("Receiver: Waiting for DISC from transmitter.\n");
-
-        // Wait to receive DISC from transmitter
+        return -1;  // fail to close
+    } else if (role == LlRx) {  // Receiver (Rx)
+        // wait to receive frame DISC do Tx
         while (state != READ) {
             if (read(fd, &byte, 1) > 0) {
                 switch (state) {
@@ -504,7 +481,7 @@ int llclose(int showStatistics) {
                         state = (byte == Awrite) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
                         break;
                     case A_RCV:
-                        state = (byte == DISC) ? C_RCV : (byte == FLAG ? FLAG_RCV : START);
+                        state = (byte == DISC) ? C_RCV : START;
                         break;
                     case C_RCV:
                         state = (byte == BCC1_DISC) ? BCC1_OK : START;
@@ -517,57 +494,17 @@ int llclose(int showStatistics) {
                 }
             }
         }
-        printf("Receiver: DISC frame received from transmitter.\n");
 
-        // Send DISC back to the transmitter
-        unsigned char discFrame[5] = {FLAG, Aread, DISC, BCC1_DISC, FLAG};
-        if (write(fd, discFrame, 5) < 0) {
-            perror("Failed to write DISC frame back");
-            return -1;
+        // send frame UA
+        unsigned char uaFrame[5] = {FLAG, Aread, CUA, BCC1r, FLAG};
+        write(fd, uaFrame, 5);
+
+        close(fd);
+        if (showStatistics) {
+            printf("Connection closed successfully. Statistics: Retransmissions: %d, Alarms: %d\n", retransmissions, alarmCount);
         }
-        printf("Receiver: DISC frame sent back to transmitter.\n");
-
-        // Wait for UA from transmitter
-        alarm(timeout);
-        alarmEnabled = 0;
-        state = START;
-
-        while (!alarmEnabled && state != READ) {
-            if (read(fd, &byte, 1) > 0) {
-                switch (state) {
-                    case START:
-                        state = (byte == FLAG) ? FLAG_RCV : START;
-                        break;
-                    case FLAG_RCV:
-                        state = (byte == Awrite) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
-                        break;
-                    case A_RCV:
-                        state = (byte == CUA) ? C_RCV : (byte == FLAG ? FLAG_RCV : START);
-                        break;
-                    case C_RCV:
-                        state = (byte == BCC1r) ? BCC1_OK : START;
-                        break;
-                    case BCC1_OK:
-                        state = (byte == FLAG) ? READ : START;
-                        break;
-                    default:
-                        break;
-                }
-            }
-        }
-
-        if (state == READ) {
-            printf("Receiver: UA frame received, disconnection confirmed.\n");
-            if (showStatistics) {
-                printf("Statistics - Retransmissions: %d, Alarms: %d\n", retransmissions - disconnectAttempt, alarmCount);
-            }
-            return 1;
-        } else {
-            printf("Receiver: UA not received. Disconnection failed.\n");
-            return -1;
-        }
+        return 1;
     }
 
-    printf("Invalid role specified for llclose().\n");
-    return -1;
+    return -1;  // Caso de erro
 }

@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <signal.h>
 
+
 #include "link_layer.h"
 #include "serial_port.h"
 
@@ -71,6 +72,7 @@ int llopen(LinkLayer connectionParameters){
     case LlTx:
         (void)signal(SIGALRM, alarmHandler);
 
+        retransmissions = connectionParameters.nRetransmissions;
         while(connectionParameters.nRetransmissions != 0){
 
             //Send the supervision frame
@@ -204,20 +206,24 @@ unsigned char readAckFrame(int fd){
     unsigned char byte, cByte = 0;
     LinkLayerState state = START;
     
-    while (state != READ&& alarmEnabled == FALSE) {  
-        if (read(fd, &byte, 1) > 0 || 1) {
+    while (state != READ && alarmEnabled == FALSE) {  
+        if (read(fd, &byte, 1) > 0 ) { // || 1
+ 
             switch (state) {
                 case START:
+                    //printf("byte: %d\n", byte);
                     if (byte == FLAG) state = FLAG1;
                     break;
                 case FLAG1:
-                    if (byte == Aread) state = A;
+                    //printf("byte: %d\n", byte);
+                    if (byte == Aread){ state = A;}
                     else if (byte != FLAG) state = START;
                     break;
                 case A:
                     if (byte == 0xAA || byte == 0xAB || byte ==  0x54 || byte ==  0x55 || byte == 0x0B){ //basicamente só a checkar se o byte é mm o C
                         state = C;
-                        cByte = byte;   
+                        cByte = byte;
+
                     }
                     else if (byte == FLAG) state = FLAG1;
                     else state = START;
@@ -300,7 +306,9 @@ int llwrite(LinkLayer connectionParameters,const unsigned char *buf, int bufSize
     int aceite = 0;
     int rejeitado = 0;
     int transmission = 0;
+    retransmissions = connectionParameters.nRetransmissions;
     while (transmission < retransmissions){
+        //printf("nao skippei");
         alarmEnabled = FALSE;
         alarm(timeout);
         rejeitado = 0;
@@ -310,11 +318,13 @@ int llwrite(LinkLayer connectionParameters,const unsigned char *buf, int bufSize
 
             write(fd, frame, stuffedFrameSize+6);
             unsigned char check = readAckFrame(fd);
+             printf("check: %d\n", check);
 
             if (!check)
                 continue;
             else if(check ==  0x54 || check == 0x55)
                 rejeitado = 1;
+                 
             else if (check == 0xAA || check == 0xAB){
                 aceite = 1;
                 bitTx = (bitTx + 1)%2;
@@ -327,12 +337,16 @@ int llwrite(LinkLayer connectionParameters,const unsigned char *buf, int bufSize
     }
 
     free(frame);
-    if(aceite) return frameSize;
+    /*printf("AlarmEnabled: %d\n", alarmEnabled);
+    printf("rejeitado: %d\n", rejeitado);
+    printf("aceite: %d\n", aceite);
+    printf("frameSize: %d\n", frameSize);*/
     
-    else{
-        //FALTA FAZER CENAS PARA FECHAR
-        return -1;
-    }
+    if(aceite) return frameSize;  
+    
+    //FALTA FAZER CENAS PARA FECHAR
+    return -1;
+    
 }
 
 ////////////////////////////////////////////////
@@ -407,12 +421,12 @@ int llread(int fd, unsigned char *packet)
 
     if (calculatedBCC2 != packet[deStuffedSize - 1]) {
         // Send REJ if BCC2 does not match
-        unsigned char rej[5] = {FLAG, Aread, 0x01, Aread ^ 0x01, FLAG};
+        unsigned char rej[5] = {FLAG, Aread, 0x54, Aread ^ 0x01, FLAG};
         write(fd, rej, 5);
         return -1;
     } else {
         // Send RR if BCC2 matches
-        unsigned char rr[5] = {FLAG, Aread, 0x05, Aread ^ 0x05, FLAG};
+        unsigned char rr[5] = {FLAG, Aread, 0xAA, Aread ^ 0x05, FLAG};
         write(fd, rr, 5);
     }
 

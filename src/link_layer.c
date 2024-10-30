@@ -184,6 +184,7 @@ unsigned char readAckFrame(int fd){
     
     while (state != READ && alarmEnabled == FALSE) {  
         if (read(fd, &byte, 1) > 0) {
+            printf("byte: %02X \n", byte);
             switch (state) {
                 case START:
                     if (byte == FLAG) state = FLAG_RCV;
@@ -197,6 +198,7 @@ unsigned char readAckFrame(int fd){
                 case A_RCV:
                     if (byte == 0xAA || byte == 0xAB || byte == 0x54 || byte == 0x55 || byte == DISC) {
                         state = C_RCV;
+                        
                         cByte = byte; // Store the control byte
                     } else if (byte == FLAG) {
                         state = FLAG_RCV;
@@ -206,7 +208,8 @@ unsigned char readAckFrame(int fd){
                     break;
 
                 case C_RCV:
-                    if (byte == (Awrite ^ cByte)) {
+                    
+                    if (byte == (Aread ^ cByte)) {
                         state = BCC1_OK;
                     } else if (byte == FLAG) {
                         state = FLAG_RCV;
@@ -216,6 +219,7 @@ unsigned char readAckFrame(int fd){
                     break;
 
                 case BCC1_OK:
+                printf("a puta passou \n");
                     if (byte == FLAG) {
                         state = READ;
                     } else {
@@ -228,7 +232,7 @@ unsigned char readAckFrame(int fd){
             }
         }
     }
-
+    printf("byte passado: %02X \n", cByte);
     return (state == READ) ? cByte : 0;
 }
 
@@ -302,10 +306,8 @@ int llwrite(const unsigned char *buf, int bufSize)
         while (!alarmEnabled && !rejeitado && !aceite) {
             write(fd, frame, stuffedFrameSize + 6);
             unsigned char check = readAckFrame(fd);
-
-            if (!check) {
-                continue;
-            } else if (check == 0x54 || check == 0x55) {
+            printf("check: %d\n", check);
+            if (check == 0x54 || check == 0x55) {
                 rejeitado = 1;
             } else if (check == 0xAA || check == 0xAB) {
                 aceite = 1;
@@ -391,7 +393,7 @@ int llread(unsigned char *packet)
 
     if (deStuffedSize < 0) {
         // Handle error in de-stuffing
-        unsigned char rej[5] = {FLAG, Aread, 0x01, Aread ^ 0x01, FLAG};
+        unsigned char rej[5] = {FLAG, Aread, 0x54, Aread ^ 0x54, FLAG};
         write(fd, rej, 5);
         return -1;
     }
@@ -404,12 +406,12 @@ int llread(unsigned char *packet)
 
     if (calculatedBCC2 != packet[deStuffedSize - 1]) {
         // Send REJ if BCC2 does not match
-        unsigned char rej[5] = {FLAG, Aread, 0x54, Aread ^ 0x01, FLAG};
+        unsigned char rej[5] = {FLAG, Aread, 0x54, Aread ^ 0x54, FLAG};
         write(fd, rej, 5);
         return -1;
     } else {
         // Send RR if BCC2 matches
-        unsigned char rr[5] = {FLAG, Aread, 0xAA, Aread ^ 0x05, FLAG};
+        unsigned char rr[5] = {FLAG, Aread, 0xAA, Aread ^ 0xAA, FLAG};
         write(fd, rr, 5);
     }
 

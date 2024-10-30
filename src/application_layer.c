@@ -50,7 +50,11 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             perror("llread failed");
         } else {
             printf("llread success: %d bytes read\n", bytesRead);
-            printf("Received data: %s\n", packet);  // Assuming it's a string, for simplicity
+            printf("Received data: %s\n", packet+3);  // Assuming it's a string, for simplicity
+            for (int i = 0; i < bytesRead; i++) {
+    printf("%02X ", packet[i]);  // Print as hex
+}
+printf("\n");
         }
     }
     int fd1 = llclose(TRUE);

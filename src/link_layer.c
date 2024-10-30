@@ -184,7 +184,7 @@ unsigned char readAckFrame(int fd){
     
     while (state != READ && alarmEnabled == FALSE) {  
         if (read(fd, &byte, 1) > 0) {
-            printf("byte: %02X \n", byte);
+            //printf("byte: %02X \n", byte);
             switch (state) {
                 case START:
                     if (byte == FLAG) state = FLAG_RCV;
@@ -236,17 +236,20 @@ unsigned char readAckFrame(int fd){
     return (state == READ) ? cByte : 0;
 }
 
-// Helper function to perform byte de-stuffing
 int byteDeStuffing(const unsigned char *stuffedData, int stuffedSize, unsigned char *dest) {
-    int j = 0; // Index for dest (de-stuffed data)
-    for (int i = 0; i < stuffedSize; i++) {
+    int j = 0; 
+    int i = 0;
+    while(i < stuffedSize) {
+        i++;
         if (stuffedData[i] == 0x7D) { // Check for escape byte
-            i++; // Move to the next byte after 0x7D
+            
             if (stuffedData[i] == 0x5E) {
-                dest[j] = 0x7E; // Replace 0x7D 0x5E with 0x7E
+                dest[j] = 0x7E; 
+                i++; 
             } 
             else if (stuffedData[i] == 0x5D) {
-                dest[j] = 0x7D; // Replace 0x7D 0x5D with 0x7D
+                dest[j] = 0x7D; 
+                i++; 
             }
         } 
         else {
@@ -260,11 +263,11 @@ int byteDeStuffing(const unsigned char *stuffedData, int stuffedSize, unsigned c
 
 int llwrite(const unsigned char *buf, int bufSize)
 {
-    unsigned char frame[MAX_FRAME_SIZE];
+    //unsigned char frame[MAX_FRAME_SIZE];
     //int fd = openSerialPort(connectionParameters.serialPort,connectionParameters.baudRate);
     //if (fd < 0) return -1;
     int frameSize = bufSize + 6;
-    //unsigned char *frame = (unsigned char*) malloc(frameSize);
+    unsigned char *frame = (unsigned char*) malloc(frameSize);
     frame[0] = FLAG;
     frame[1] = Awrite;
     frame[2] = bitTx << 7; //nao sei se é 6 ou 7 | later bitTx = (bitTx++)%2
@@ -299,14 +302,14 @@ int llwrite(const unsigned char *buf, int bufSize)
     
     while (transmission < retransmissions) {
         alarmEnabled = FALSE;
-        alarm(timeout);
+        //alarm(timeout);
         aceite = 0;
         rejeitado = 0;
 
         while (!alarmEnabled && !rejeitado && !aceite) {
             write(fd, frame, stuffedFrameSize + 6);
             unsigned char check = readAckFrame(fd);
-            printf("check: %d\n", check);
+            printf("check: %02X\n", check);
             if (check == 0x54 || check == 0x55) {
                 rejeitado = 1;
             } else if (check == 0xAA || check == 0xAB) {
@@ -322,8 +325,11 @@ int llwrite(const unsigned char *buf, int bufSize)
 
     //free(frame);
 
-    if (aceite) return frameSize;
-    
+    if (aceite){
+     printf("[INFO] Foi aceite! frameSize: %d \n", frameSize);
+     return frameSize;
+    }
+
     printf("Sending frame: ");
     for (int i = 0; i < bufSize; i++) {
         printf("%02X ", frame[i]);

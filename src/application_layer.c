@@ -1,11 +1,9 @@
 #include "link_layer.h"
-#include "application_layer.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <string.h>
 
 #define PACKET_START 0x02
 #define PACKET_END 0x03
@@ -99,7 +97,6 @@ void sendFile(const char* filename) {
         dataPacket[1] = seq % 256;
         dataPacket[2] = (dataSize >> 8) & 0xFF; 
         dataPacket[3] = dataSize & 0xFF; 
-        printf("[DEBUG] dataSize: %d    fileSize: %d \n", dataSize, fileSize);
         memcpy(&dataPacket[4], &fileData[bytesSent], dataSize);
 
         llwrite(dataPacket, dataSize + 4);
@@ -171,12 +168,12 @@ void receiveFile(const char* filename) {
             }
 
             struct stat st = {0};
-            //if (stat("/output", &st) == -1) {
-            //    mkdir("/output", 0700);
-            //}
+            if (stat("/output", &st) == -1) {
+                mkdir("/output", 0700);
+            }
 
             char finalPath[256];
-            snprintf(finalPath, sizeof(finalPath), "%s", filename);
+            snprintf(finalPath, sizeof(finalPath), "/output/%s", filename);
             if (writeFile(finalPath, fileData, bytesReceived) == 0) {
                 printf("[INFO] File reassembled and saved successfully: %s\n", finalPath);
             } else {
@@ -217,13 +214,13 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
             return;
         }
 
-        receiveFile("penguin-received.gif");
+        receiveFile("received.gif");
     } else {
         printf("[ERROR] Invalid role specified. Must be 'tx' or 'rx'.\n");
         return;
     }
 
-    if (llclose(1) < 0) {
-      printf("[ERROR] Failed to close the link layer connection.\n");
+    if (llclose(connectionParams, 1) < 0) {
+        printf("[ERROR] Failed to close the link layer connection.\n");
     }
 }

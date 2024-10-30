@@ -236,20 +236,21 @@ unsigned char readAckFrame(int fd){
     return (state == READ) ? cByte : 0;
 }
 
+
 int byteDeStuffing(const unsigned char *stuffedData, int stuffedSize, unsigned char *dest) {
-    int j = 0; 
-    int i = 0;
-    while(i < stuffedSize) {
-        i++;
+
+    int j = 0; // Index for dest (de-stuffed data)
+
+    for (int i = 0; i < stuffedSize; i++) {
         if (stuffedData[i] == 0x7D) { // Check for escape byte
             
-            if (stuffedData[i] == 0x5E) {
+            if (stuffedData[i+1] == 0x5E) {
                 dest[j] = 0x7E; 
-                i++; 
+                i++;
             } 
-            else if (stuffedData[i] == 0x5D) {
+            else if (stuffedData[i+1] == 0x5D) {
                 dest[j] = 0x7D; 
-                i++; 
+                i++;
             }
         } 
         else {
@@ -257,7 +258,8 @@ int byteDeStuffing(const unsigned char *stuffedData, int stuffedSize, unsigned c
         }
         j++;
     }
-    return j; // Return the size of de-stuffed data
+
+   return j; // Return the size of de-stuffed data
 }
 
 

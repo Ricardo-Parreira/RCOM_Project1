@@ -97,6 +97,7 @@ void sendFile(const char* filename) {
         dataPacket[1] = seq % 256;
         dataPacket[2] = (dataSize >> 8) & 0xFF; 
         dataPacket[3] = dataSize & 0xFF; 
+        printf("fileSize: %d   bytesSent: %d", fileSize, bytesSent);
         memcpy(&dataPacket[4], &fileData[bytesSent], dataSize);
 
         llwrite(dataPacket, dataSize + 4);
@@ -168,12 +169,12 @@ void receiveFile(const char* filename) {
             }
 
             struct stat st = {0};
-            if (stat("/output", &st) == -1) {
-                mkdir("/output", 0700);
-            }
+            //if (stat("/output", &st) == -1) {
+            //    mkdir("/output", 0700);
+            //}
 
             char finalPath[256];
-            snprintf(finalPath, sizeof(finalPath), "/output/%s", filename);
+            snprintf(finalPath, sizeof(finalPath), "%s", filename);
             if (writeFile(finalPath, fileData, bytesReceived) == 0) {
                 printf("[INFO] File reassembled and saved successfully: %s\n", finalPath);
             } else {
@@ -214,7 +215,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
             return;
         }
 
-        receiveFile("received.gif");
+        receiveFile("penguin-received.gif");
     } else {
         printf("[ERROR] Invalid role specified. Must be 'tx' or 'rx'.\n");
         return;

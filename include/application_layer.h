@@ -1,8 +1,8 @@
 // Application layer protocol header.
 // NOTE: This file must not be changed.
 
-#ifndef _APPLICATION_LAYER_H_
-#define _APPLICATION_LAYER_H_
+#ifndef APPLICATION_LAYER_H
+#define APPLICATION_LAYER_H
 
 // Application layer main function.
 // Arguments:
@@ -14,11 +14,8 @@
 //   filename: Name of the file to send / receive.
 void applicationLayer(const char *serialPort, const char *role, int baudRate,
                       int nTries, int timeout, const char *filename);
-void receiveFile(const char* filename);
-void sendFile(const char* filename);
-unsigned char* createControlPacket(int type, int fileSize, const char* filename, int* packetSize);
-unsigned char* readFile(const char* filename, int* fileSize) ;
-
-
-
-#endif // _APPLICATION_LAYER_H_
+                      
+unsigned char * buildControlPacket(int control_field,int fileSize, const char* fileName,int *controlpacketSize);
+unsigned char * readControlPacket(unsigned char* controlpacket,int packetSize,int* fileSize);
+unsigned char * buildDataPacket(unsigned char sequence, unsigned char *data_field, int dataFieldSize);
+#endif // APPLICATION_LAYER_H

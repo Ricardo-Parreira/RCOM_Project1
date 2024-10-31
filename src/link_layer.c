@@ -304,7 +304,7 @@ int llwrite(const unsigned char *buf, int bufSize)
     
     while (transmission < retransmissions) {
         alarmEnabled = FALSE;
-        //alarm(timeout);
+        alarm(timeout);
         aceite = 0;
         rejeitado = 0;
 

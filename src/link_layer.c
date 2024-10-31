@@ -407,8 +407,8 @@ int llread(unsigned char *packet)
     }
 
     // Calculate BCC2 for the de-stuffed data
-    unsigned char calculatedBCC2 = 0;
-    for (int i = 0; i < deStuffedSize - 1; i++) {
+    unsigned char calculatedBCC2 = packet[3];
+    for (int i = 4; i < deStuffedSize - 1; i++) {
         calculatedBCC2 ^= packet[i];
     }
 

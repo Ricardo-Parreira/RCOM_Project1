@@ -35,7 +35,7 @@ unsigned char* readFile(const char* filename, int* fileSize) {
 
 int writeFile(const char* filename, unsigned char* fileData, int fileSize) {
     FILE* file = fopen(filename, "wb");
-    if (!file) {
+    if (file!=NULL) {
         printf("[ERROR] Failed to open file for writing: %s\n", filename);
         return -1;
     }
@@ -205,7 +205,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
             printf("[ERROR] Failed to establish link layer connection.\n");
             return;
         }
-
+        filename = "source.txt"; //só para testar
         sendFile(filename);
     } else if (strcmp(role, "rx") == 0) {
         connectionParams.role = LlRx;
@@ -215,7 +215,8 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate, in
             return;
         }
 
-        receiveFile("penguin-received.gif");
+        //receiveFile("penguin-received.gif");
+        receiveFile("output.txt");
     } else {
         printf("[ERROR] Invalid role specified. Must be 'tx' or 'rx'.\n");
         return;

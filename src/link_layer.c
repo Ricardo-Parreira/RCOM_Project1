@@ -39,6 +39,10 @@ void alarmHandler(int signal)
     printf("Alarm #%d\n", alarmCount);
 }
 
+
+////////////////////////////////////////////////
+// LLOPEN
+////////////////////////////////////////////////
 int llopen(LinkLayer connectionParameters)
 {   
     alarmCount = 0;
@@ -144,7 +148,7 @@ int llopen(LinkLayer connectionParameters)
     return -1;
 }
 
-
+////// AUXILIARY FUNCTIONS FOR LLWRITE//////
 unsigned char *byteStuffing(const unsigned char *data, int dataSize, int *newSize) {
     // Temporary buffer with maximum possible size
     unsigned char *stuffedData = (unsigned char *)malloc(dataSize * 2);
@@ -167,7 +171,7 @@ unsigned char *byteStuffing(const unsigned char *data, int dataSize, int *newSiz
     return stuffedData;
 }
 
-// Auxiliary function to handle acknowledgment frame checking
+// Acknowledgment frame checking
 int checkAckFrame(unsigned char *Cbyte) {
     State state = INIT;
     unsigned char byte;
@@ -183,7 +187,7 @@ int checkAckFrame(unsigned char *Cbyte) {
                     else if (byte != FLAG) state = INIT;
                     break;
                 case A_RECEBIDO:
-                    if (byte == C_RR_0 || byte == C_RR_1 || byte == C_REJ_0 || byte == C_REJ_1) {
+                    if (byte == C_RR_0 || byte == C_RR_1 || byte == C_REJ_0 || byte == C_REJ_1) { //basicamente só ver se o c foi recebido
                         state = C_RECEBIDO;
                         *Cbyte = byte;
                     }
@@ -207,15 +211,18 @@ int checkAckFrame(unsigned char *Cbyte) {
 
     if (state == LIDO) {
         if (*Cbyte == C_RR_0 || *Cbyte == C_RR_1) {
-            return 1; // Frame accepted (RR)
+            return 1; 
         }
         else if (*Cbyte == C_REJ_0 || *Cbyte == C_REJ_1) {
-            return 0; // Frame rejected (REJ)
+            return 0;
         }
     }
-    return -1; // Error in state machine or no valid acknowledgment
+    return -1; 
 }
 
+////////////////////////////////////////////////
+// LLWRITE
+////////////////////////////////////////////////
 int llwrite(const unsigned char *buf, int bufSize) {
     int frame_size = 6 + bufSize; // Initial frame size (including header and last FLAG)
     unsigned char *frame = (unsigned char *)malloc(frame_size);
@@ -224,7 +231,7 @@ int llwrite(const unsigned char *buf, int bufSize) {
         return -1;
     }
 
-    // Prepare the frame header
+    // Header
     frame[0] = FLAG;
     frame[1] = Awrite;
     frame[2] = (frame_sequence == 0) ? I_FRAME_0 : I_FRAME_1;
@@ -236,7 +243,7 @@ int llwrite(const unsigned char *buf, int bufSize) {
         BCC2 ^= buf[i];
     }
 
-    // Perform byte stuffing on data and BCC2 (similar as shown before)
+    // Byte stuffing
     int stuffedDataSize;
     unsigned char *stuffedData = byteStuffing(buf, bufSize, &stuffedDataSize);
     if (stuffedData == NULL) {
@@ -254,21 +261,18 @@ int llwrite(const unsigned char *buf, int bufSize) {
     memcpy(frame + 4, stuffedData, stuffedDataSize);
     free(stuffedData);
 
-    int stuffedBCC2Size;
-    unsigned char BCC2Array[1] = {BCC2};
-    unsigned char *stuffedBCC2 = byteStuffing(BCC2Array, 1, &stuffedBCC2Size);
-    frame = realloc(frame, 4 + stuffedDataSize + stuffedBCC2Size + 1);
-    if (frame == NULL) {
-        free(stuffedBCC2);
-        perror("[ERROR] Memory allocation failed");
-        return -1;
+    stuffedDataSize += 4;
+
+    //BCC2 needs to be stuffed too
+    if (BCC2 == FLAG || BCC2 == ESC_BYTE) {
+        frame[stuffedDataSize++] = ESC_BYTE;
+        frame[stuffedDataSize++] = BCC2 ^ 0x20;
+    } else {
+        frame[stuffedDataSize++] = BCC2;
     }
 
-    memcpy(frame + 4 + stuffedDataSize, stuffedBCC2, stuffedBCC2Size);
-    free(stuffedBCC2);
-
-    frame[4 + stuffedDataSize + stuffedBCC2Size] = FLAG;
-    frame_size = 4 + stuffedDataSize + stuffedBCC2Size + 1;
+    frame[stuffedDataSize++] = FLAG;
+    frame_size = stuffedDataSize + 1;
 
     alarmCount = 0;
     alarmEnabled = FALSE;
@@ -290,12 +294,12 @@ int llwrite(const unsigned char *buf, int bufSize) {
         }
 
         int ackStatus = checkAckFrame(&Cbyte);
-        if (ackStatus == 1) { // Frame accepted
+        if (ackStatus == 1) { 
             aceite = 1;
             frame_sequence = (frame_sequence + 1) % 2;
             received_bits += frame_size * 8;
         }
-        else if (ackStatus == 0) { // Frame rejected
+        else if (ackStatus == 0) {
             rejeitado = 1;
             error_count++;
         }
@@ -317,108 +321,135 @@ int llwrite(const unsigned char *buf, int bufSize) {
     return aceite ? frame_size : -1;
 }
 
+////// AUXILIARY FUNCTION FOR LLREAD//////
+unsigned char* byteDestuffing(const unsigned char *stuffedData, int stuffedSize, int *destuffedSize) {
+    unsigned char *destuffedData = (unsigned char *)malloc(stuffedSize); // Max size after destuffing
+    if (destuffedData == NULL) {
+        perror("[ERROR] Memory allocation failed for destuffed data");
+        *destuffedSize = -1;
+        return NULL;
+    }
+    int j = 0;
+    for (int i = 0; i < stuffedSize; i++) {
+        if (stuffedData[i] == ESC_BYTE) {
+            if (i + 1 < stuffedSize) {
+                destuffedData[j++] = stuffedData[++i] ^ 0x20; // Reverse stuffing
+            }
+        } else {
+            destuffedData[j++] = stuffedData[i];
+        }
+    }
 
+    *destuffedSize = j;
+    return destuffedData;
+}
+
+////////////////////////////////////////////////
+// LLREAD
+////////////////////////////////////////////////
 int llread(unsigned char *packet) {
-
     int dataIndex = 0;  
     unsigned char CResponse;
     int readByte = 0;
     State state = INIT;
     unsigned char byte;
     unsigned char Cbyte;
-    
+    unsigned char stuffedPacket[1024]; // Buffer to hold stuffed data
+    int stuffedIndex = 0;
+
     // State machine to read the frame
     while (state != LIDO) {
-        readByte = read(fd, &byte, 1) ;
+        readByte = read(fd, &byte, 1);
         if (readByte > 0) {
-        switch (state) {
-            case INIT:
-                if (byte == FLAG)
-                    state = FLAG_RECEBIDO;  
-                break;
+            switch (state) {
+                case INIT:
+                    if (byte == FLAG)
+                        state = FLAG_RECEBIDO;
+                    break;
 
-            case FLAG_RECEBIDO:
-                if (byte == Awrite)
-                    state = A_RECEBIDO;  
-                else if (byte != FLAG)
-                    state = INIT;  
-                break;
+                case FLAG_RECEBIDO:
+                    if (byte == Awrite)
+                        state = A_RECEBIDO;
+                    else if (byte != FLAG)
+                        state = INIT;
+                    break;
 
-            case A_RECEBIDO:
-                if (byte == I_FRAME_0 || byte == I_FRAME_1) {  
-                    Cbyte = byte;
-                    state = C_RECEBIDO;  
-                } else if (byte == FLAG)
-                    state = FLAG_RECEBIDO;  
-                else
-                    state = INIT;  
-                break;
+                case A_RECEBIDO:
+                    if (byte == I_FRAME_0 || byte == I_FRAME_1) {
+                        Cbyte = byte;
+                        state = C_RECEBIDO;
+                    } else if (byte == FLAG)
+                        state = FLAG_RECEBIDO;
+                    else
+                        state = INIT;
+                    break;
 
-            case C_RECEBIDO:
-                if (byte == (Awrite ^ Cbyte))  
-                    state = BCC_RECEBIDO;  
-                else if (byte == FLAG)
-                    state = FLAG_RECEBIDO;  
-                else
-                    state = INIT;  
-                break;
+                case C_RECEBIDO:
+                    if (byte == (Awrite ^ Cbyte))
+                        state = BCC_RECEBIDO;
+                    else if (byte == FLAG)
+                        state = FLAG_RECEBIDO;
+                    else
+                        state = INIT;
+                    break;
 
-            // Receiving data
-            case BCC_RECEBIDO:
-                if (byte == ESC_BYTE) {
-                    state = ESC_RECEBIDO;  
-                } 
-                else if (byte == FLAG) {
-                unsigned char BCC2 = packet[dataIndex - 1];  
-                dataIndex--;  
-                packet[dataIndex] = '\0';  
-                unsigned char bcc_check = packet[0];
-                for (unsigned int j = 1; j < dataIndex; j++) {
-                    bcc_check ^= packet[j];
-                }
-                if (BCC2 == bcc_check) {
-                    state = LIDO;  
-                } 
-                else {
-                    if(frame_sequence == 0)CResponse = C_REJ_0;
-                    else CResponse = C_REJ_1;
-                    unsigned char frame[5] = {FLAG,Aread,CResponse,Aread ^CResponse,FLAG} ;
-                    write(fd, frame, 5);
-                    printf("[ERROR] Frame rejected.\n");
-                    printf("Readon: BCC2 didnt match.\n");
-                    return -1;  
-                }
-                } 
-                else {
-                    packet[dataIndex++] = byte; //every time it is stuck on BCC_RECEBIDO it will increment the index
-                }
-            break;
-            case ESC_RECEBIDO:
-                state = BCC_RECEBIDO;
-                if (byte == FLAG || byte == ESC_BYTE) {
-                    packet[dataIndex++] = byte;
-                } else {
-                    packet[dataIndex++] = byte ^ 0x20;  
-                }
-                break;
+                // Receiving data
+                case BCC_RECEBIDO:
+                    if (byte == FLAG) {
+                        // Apply byte destuffing on the received data (stored in stuffedPacket)
+                        int destuffedSize;
+                        unsigned char *destuffedData = byteDestuffing(stuffedPacket, stuffedIndex, &destuffedSize);
+                        if (destuffedData == NULL) {
+                            perror("[ERROR] Destuffing failed");
+                            return -1;
+                        }
 
+                        // Extract and check BCC2
+                        unsigned char BCC2 = destuffedData[destuffedSize - 1];
+                        destuffedSize--;  // Exclude BCC2 from the packet data
+                        unsigned char bcc_check = destuffedData[0];
+                        for (int j = 1; j < destuffedSize; j++) {
+                            bcc_check ^= destuffedData[j];
+                        }
 
-            default:
-                break;
-        }
-        }
-        else if(readByte <0) {
-            openSerialPort(serialPort,baudRate);
+                        if (BCC2 == bcc_check) {
+                            memcpy(packet, destuffedData, destuffedSize); // Copy destuffed data to packet
+                            free(destuffedData);
+                            state = LIDO;
+                            dataIndex = destuffedSize;
+                        } else {
+                            free(destuffedData);
+                            CResponse = (frame_sequence == 0) ? C_REJ_0 : C_REJ_1;
+                            unsigned char frame[5] = {FLAG, Aread, CResponse, Aread ^ CResponse, FLAG};
+                            write(fd, frame, 5);
+                            printf("[ERROR] Frame rejected.\n");
+                            printf("Reason: BCC2 didn't match.\n");
+                            return -1;
+                        }
+                    } else {
+                        // Accumulate stuffed data
+                        stuffedPacket[stuffedIndex++] = byte;
+                    }
+                    break;
+
+                default:
+                    break;
+            }
+        } else if (readByte < 0) {
+            openSerialPort(serialPort, baudRate);
         }
     }
-    if(frame_sequence == 0)CResponse = C_RR_0;
-    else CResponse = C_RR_1;
-    unsigned char frame[5] = {FLAG,Aread,CResponse,Aread ^CResponse,FLAG} ;
-    write(fd,frame,5);
-    printf("Frame received!!\n");
-    return dataIndex; 
+
+    CResponse = (frame_sequence == 0) ? C_RR_0 : C_RR_1;
+    unsigned char frame[5] = {FLAG, Aread, CResponse, Aread ^ CResponse, FLAG};
+    write(fd, frame, 5);
+    printf("Frame received successfully!\n");
+    return dataIndex;
 }
 
+////////////////////////////////////////////////
+// LLCLOSE
+////////////////////////////////////////////////
 int llclose(int showStatistics)
 {   
     alarmCount = 0;

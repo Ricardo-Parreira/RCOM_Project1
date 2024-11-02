@@ -16,7 +16,7 @@
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
 
-clock_t start_time;
+clock_t start;
 int received_bits = 0;
 int sent_bits = 0;
 extern int fd;
@@ -503,11 +503,12 @@ int llclose(int showStatistics)
                     printf("UA frame sent. Terminating connection.\n");
                     int closeStatus = closeSerialPort();
                     if (showStatistics) {
-                        double time_taken = endClock();
-                        printf("Total elapsed time: %f seconds\n", time_taken);
+                        double duration = endClock();
+                        printf("Baudrate: %i\n", baudRate);
+                        printf("Total elapsed time: %f seconds\n", duration);
                         printf("Count of rejected frames: %i\n", error_count);
-                        double sent_rate = sent_bits / time_taken;
-                        double received_rate = received_bits / time_taken;
+                        double sent_rate = sent_bits / duration;
+                        double received_rate = received_bits / duration;
                         printf("Total bits received: %i\n", received_bits);
                         printf("Reception rate (bits/sec): %f\n", received_rate);
                         printf("Total bits sent: %i\n", sent_bits);
@@ -590,9 +591,9 @@ int llclose(int showStatistics)
                     printf("Received UA, closing connection now.\n");
                     int closeStatus = closeSerialPort();
                     if (showStatistics) {
-                        double time_taken = endClock(); 
-                        printf("Elapsed time: %f seconds\n", time_taken);
-                        printf("Connection closed successfully.\n");
+                        double duration = endClock(); 
+                        printf("Total elapsed time: %f seconds\n", duration);
+                        printf("Connection terminated.\n");
                     }
                     return closeStatus;
                     }  
@@ -608,11 +609,11 @@ int llclose(int showStatistics)
 }
 
 void startClock() {
-    start_time = clock(); 
+    start = clock(); 
 }
 
 double endClock() {
-    clock_t end_time = clock(); 
-    double elapsed_time = (double)(end_time - start_time) / CLOCKS_PER_SEC;
-    return elapsed_time;
+    clock_t end = clock(); 
+    double elapsed = (double)(end - start) / CLOCKS_PER_SEC;
+    return elapsed;
 }

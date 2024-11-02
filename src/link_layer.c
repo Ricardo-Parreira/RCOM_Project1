@@ -167,6 +167,55 @@ unsigned char *byteStuffing(const unsigned char *data, int dataSize, int *newSiz
     return stuffedData;
 }
 
+// Auxiliary function to handle acknowledgment frame checking
+int checkAckFrame(unsigned char *Cbyte) {
+    State state = INIT;
+    unsigned char byte;
+
+    while (alarmEnabled == TRUE && state != LIDO) {  
+        if (read(fd, &byte, 1) > 0) {
+            switch (state) {
+                case INIT:
+                    if (byte == FLAG) state = FLAG_RECEBIDO; 
+                    break;
+                case FLAG_RECEBIDO:
+                    if (byte == Aread) state = A_RECEBIDO; 
+                    else if (byte != FLAG) state = INIT;
+                    break;
+                case A_RECEBIDO:
+                    if (byte == C_RR_0 || byte == C_RR_1 || byte == C_REJ_0 || byte == C_REJ_1) {
+                        state = C_RECEBIDO;
+                        *Cbyte = byte;
+                    }
+                    else if (byte == FLAG) state = FLAG_RECEBIDO;
+                    else state = INIT;
+                    break;
+                case C_RECEBIDO:
+                    if (byte == (Aread ^ *Cbyte)) state = BCC_RECEBIDO;
+                    else if (byte == FLAG) state = FLAG_RECEBIDO;
+                    else state = INIT;
+                    break;
+                case BCC_RECEBIDO:
+                    if (byte == FLAG) state = LIDO;
+                    else state = INIT;
+                    break;
+                default:
+                    break;           
+            }
+        }         
+    }
+
+    if (state == LIDO) {
+        if (*Cbyte == C_RR_0 || *Cbyte == C_RR_1) {
+            return 1; // Frame accepted (RR)
+        }
+        else if (*Cbyte == C_REJ_0 || *Cbyte == C_REJ_1) {
+            return 0; // Frame rejected (REJ)
+        }
+    }
+    return -1; // Error in state machine or no valid acknowledgment
+}
+
 int llwrite(const unsigned char *buf, int bufSize) {
     int frame_size = 6 + bufSize; // Initial frame size (including header and last FLAG)
     unsigned char *frame = (unsigned char *)malloc(frame_size);
@@ -174,7 +223,7 @@ int llwrite(const unsigned char *buf, int bufSize) {
         perror("[ERROR] Memory allocation failed");
         return -1;
     }
-    
+
     // Prepare the frame header
     frame[0] = FLAG;
     frame[1] = Awrite;
@@ -187,125 +236,85 @@ int llwrite(const unsigned char *buf, int bufSize) {
         BCC2 ^= buf[i];
     }
 
-    // Perform byte stuffing on data and BCC2
+    // Perform byte stuffing on data and BCC2 (similar as shown before)
     int stuffedDataSize;
     unsigned char *stuffedData = byteStuffing(buf, bufSize, &stuffedDataSize);
     if (stuffedData == NULL) {
         free(frame);
         return -1;
     }
-    
-    // Reallocate frame for stuffed data
-    frame = realloc(frame, 4 + stuffedDataSize + 2); // Header (4), stuffed data, BCC2, and FLAG
+
+    frame = realloc(frame, 4 + stuffedDataSize + 2);
     if (frame == NULL) {
         free(stuffedData);
         perror("[ERROR] Memory allocation failed");
         return -1;
     }
 
-    memcpy(frame + 4, stuffedData, stuffedDataSize); // Copy stuffed data into frame
+    memcpy(frame + 4, stuffedData, stuffedDataSize);
     free(stuffedData);
 
-    // Perform byte stuffing on BCC2 and append it to frame
     int stuffedBCC2Size;
     unsigned char BCC2Array[1] = {BCC2};
     unsigned char *stuffedBCC2 = byteStuffing(BCC2Array, 1, &stuffedBCC2Size);
-    frame = realloc(frame, 4 + stuffedDataSize + stuffedBCC2Size + 1); // Header, data, BCC2, FLAG
+    frame = realloc(frame, 4 + stuffedDataSize + stuffedBCC2Size + 1);
     if (frame == NULL) {
         free(stuffedBCC2);
         perror("[ERROR] Memory allocation failed");
         return -1;
     }
 
-    memcpy(frame + 4 + stuffedDataSize, stuffedBCC2, stuffedBCC2Size); // Append BCC2
+    memcpy(frame + 4 + stuffedDataSize, stuffedBCC2, stuffedBCC2Size);
     free(stuffedBCC2);
 
-    frame[4 + stuffedDataSize + stuffedBCC2Size] = FLAG; // Add closing FLAG
-    frame_size = 4 + stuffedDataSize + stuffedBCC2Size + 1; // Update final frame size
-
+    frame[4 + stuffedDataSize + stuffedBCC2Size] = FLAG;
+    frame_size = 4 + stuffedDataSize + stuffedBCC2Size + 1;
 
     alarmCount = 0;
     alarmEnabled = FALSE;
     int aceite = 0;
     int rejeitado = 0;
-    State state = INIT;
     unsigned char Cbyte;
-    unsigned char byte;
     (void)signal(SIGALRM, alarmHandler);
 
     // Check acknowledgement frame
-    while (alarmCount <= transmitions ){
-            if (alarmEnabled == FALSE){
-                if(write(fd, frame, frame_size) == -1){
-                    openSerialPort(serialPort,baudRate);
-                }
-                rejeitado = 0;
-                alarm(timeout); 
-                alarmEnabled =  TRUE;
-                sent_bits += frame_size * 8;
+    while (alarmCount <= transmitions) {
+        if (alarmEnabled == FALSE) {
+            if (write(fd, frame, frame_size) == -1) {
+                openSerialPort(serialPort, baudRate);
             }
-            while (alarmEnabled == TRUE && state != LIDO){  
-                if (read(fd,&byte,1) > 0){
-                    switch(state){
-                        case INIT:
-                            if (byte == FLAG) state = FLAG_RECEBIDO; 
-                            break;
-                        case FLAG_RECEBIDO:
-                            if (byte == Aread) state = A_RECEBIDO; 
-                            else if (byte != FLAG) state = INIT;
-                            break;
-                        case A_RECEBIDO:
-                            if ( byte == C_RR_0 || byte == C_RR_1 || byte == C_REJ_0 || byte == C_REJ_1 ){
-                                state = C_RECEBIDO;
-                                Cbyte = byte;
-                            }
-                            else if (byte == FLAG) state = FLAG_RECEBIDO;
-                            else state = INIT;
-                            break;
-                        case C_RECEBIDO:
-                            if(byte == (Aread ^ Cbyte)) state = BCC_RECEBIDO;
-                            else if (byte == FLAG) state = FLAG_RECEBIDO;
-                            else state = INIT;
-                            break;
-                        case BCC_RECEBIDO:
-                            if(byte == FLAG){
-                                state = LIDO;
-                            }
-                            else state = INIT;
-                            break;
-                        default:
-                            break;           
-                    }
-                }         
-            }
-            if(state == LIDO){
-                if(Cbyte == C_RR_0 || Cbyte == C_RR_1){
-                    aceite = 1;
-                    frame_sequence = (frame_sequence+1)%2;
-                    received_bits += frame_size *8;
-                }
-                else if(Cbyte == C_REJ_0 || Cbyte== C_REJ_1){
-                    rejeitado = 1;
-                    error_count++;
-                }
-           
-            }
-            if(aceite){
-                alarmCount = transmitions+1;
-                alarm(0);
-                alarmEnabled = FALSE;
-                break;
-            }
-            if(rejeitado){
-                alarm(0);
-                printf("[ERROR] Frame rejected!\n");
-                alarmHandler(SIGALRM);
-                state = INIT;
-            }
+            rejeitado = 0;
+            alarm(timeout); 
+            alarmEnabled = TRUE;
+            sent_bits += frame_size * 8;
+        }
+
+        int ackStatus = checkAckFrame(&Cbyte);
+        if (ackStatus == 1) { // Frame accepted
+            aceite = 1;
+            frame_sequence = (frame_sequence + 1) % 2;
+            received_bits += frame_size * 8;
+        }
+        else if (ackStatus == 0) { // Frame rejected
+            rejeitado = 1;
+            error_count++;
+        }
+
+        if (aceite) {
+            alarmCount = transmitions + 1;
+            alarm(0);
+            alarmEnabled = FALSE;
+            break;
+        }
+        if (rejeitado) {
+            alarm(0);
+            printf("[ERROR] Frame rejected!\n");
+            alarmHandler(SIGALRM);
+        }
     }
+
     free(frame);
-    if (aceite) return frame_size;
-    return -1;
+    return aceite ? frame_size : -1;
 }
 
 

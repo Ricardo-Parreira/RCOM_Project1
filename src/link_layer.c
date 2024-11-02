@@ -144,54 +144,86 @@ int llopen(LinkLayer connectionParameters)
     return -1;
 }
 
-int llwrite(const unsigned char *buf, int bufSize)
-{
-    int frame_size = 6 + bufSize; // to fit the header and the last flag
+
+unsigned char *byteStuffing(const unsigned char *data, int dataSize, int *newSize) {
+    // Temporary buffer with maximum possible size
+    unsigned char *stuffedData = (unsigned char *)malloc(dataSize * 2);
+    if (stuffedData == NULL) {
+        perror("[ERROR] Memory allocation failed");
+        return NULL;
+    }
+    
+    int j = 0;
+    for (int i = 0; i < dataSize; i++) {
+        if (data[i] == FLAG || data[i] == ESC_BYTE) {
+            stuffedData[j++] = ESC_BYTE;
+            stuffedData[j++] = data[i] ^ 0x20;
+        } else {
+            stuffedData[j++] = data[i];
+        }
+    }
+    
+    *newSize = j; // Update the new size after stuffing
+    return stuffedData;
+}
+
+int llwrite(const unsigned char *buf, int bufSize) {
+    int frame_size = 6 + bufSize; // Initial frame size (including header and last FLAG)
     unsigned char *frame = (unsigned char *)malloc(frame_size);
+    if (frame == NULL) {
+        perror("[ERROR] Memory allocation failed");
+        return -1;
+    }
+    
+    // Prepare the frame header
     frame[0] = FLAG;
     frame[1] = Awrite;
-    if(frame_sequence == 0)frame[2] = I_FRAME_0;
-    else frame[2] = I_FRAME_1;
-    frame[3] = Awrite ^ frame[2];
-    memcpy(frame + 4,buf, bufSize);
-    unsigned char BCC2  = buf[0];
-    for(int i = 1;i<= bufSize;i++){
-        BCC2 = BCC2 ^ buf[i];
-    }
-    int j = 4;  
+    frame[2] = (frame_sequence == 0) ? I_FRAME_0 : I_FRAME_1;
+    frame[3] = frame[1] ^ frame[2];
 
-    // Byte stuffing (substitute 0x7E and 0x7D)
-    for (unsigned int i = 0; i < bufSize; i++) {
-        if (buf[i] == FLAG || buf[i] == ESC_BYTE) {
-            frame = realloc(frame, ++frame_size);
-            if (frame == NULL) {
-                perror("[ERROR] Memory allocation failed");
-                return -1;  
-            }
-            frame[j++] = ESC_BYTE;  
-            frame[j++] = buf[i] ^ 0x20;  
-        } 
-        else// No byte stuffing
-            frame[j++] = buf[i];  
-        
+    // Calculate BCC2
+    unsigned char BCC2 = buf[0];
+    for (int i = 1; i < bufSize; i++) {
+        BCC2 ^= buf[i];
     }
-    // BCC2 byte stuffing
-    if (BCC2 == FLAG || BCC2 == ESC_BYTE) {
-    frame = realloc(frame, ++frame_size);
-        if (frame == NULL) {
-            perror("[ERROR] Memory allocation failed");
-            return -1;
-        }
-        frame[j++] = ESC_BYTE;
-        frame[j++] = BCC2 ^ 0x20; 
-  
 
-    } 
-    else { // No byte stuffing
-        frame[j++] = BCC2;
- 
+    // Perform byte stuffing on data and BCC2
+    int stuffedDataSize;
+    unsigned char *stuffedData = byteStuffing(buf, bufSize, &stuffedDataSize);
+    if (stuffedData == NULL) {
+        free(frame);
+        return -1;
     }
-    frame[j++] = FLAG;
+    
+    // Reallocate frame for stuffed data
+    frame = realloc(frame, 4 + stuffedDataSize + 2); // Header (4), stuffed data, BCC2, and FLAG
+    if (frame == NULL) {
+        free(stuffedData);
+        perror("[ERROR] Memory allocation failed");
+        return -1;
+    }
+
+    memcpy(frame + 4, stuffedData, stuffedDataSize); // Copy stuffed data into frame
+    free(stuffedData);
+
+    // Perform byte stuffing on BCC2 and append it to frame
+    int stuffedBCC2Size;
+    unsigned char BCC2Array[1] = {BCC2};
+    unsigned char *stuffedBCC2 = byteStuffing(BCC2Array, 1, &stuffedBCC2Size);
+    frame = realloc(frame, 4 + stuffedDataSize + stuffedBCC2Size + 1); // Header, data, BCC2, FLAG
+    if (frame == NULL) {
+        free(stuffedBCC2);
+        perror("[ERROR] Memory allocation failed");
+        return -1;
+    }
+
+    memcpy(frame + 4 + stuffedDataSize, stuffedBCC2, stuffedBCC2Size); // Append BCC2
+    free(stuffedBCC2);
+
+    frame[4 + stuffedDataSize + stuffedBCC2Size] = FLAG; // Add closing FLAG
+    frame_size = 4 + stuffedDataSize + stuffedBCC2Size + 1; // Update final frame size
+
+
     alarmCount = 0;
     alarmEnabled = FALSE;
     int aceite = 0;

@@ -56,6 +56,8 @@ typedef struct
 // Return "1" on success or "-1" on error.
 int llopen(LinkLayer connectionParameters);
 
+unsigned char *byteStuffing(const unsigned char *data, int dataSize, int *newSize);
+
 // Send data in buf with size bufSize.
 // Return number of chars written, or "-1" on error.
 int llwrite(const unsigned char *buf, int bufSize);

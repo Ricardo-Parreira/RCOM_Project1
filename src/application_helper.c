@@ -13,6 +13,7 @@ int initializeConnection(LinkLayer *linkLayer, const char *serialPort, const cha
     if (fd < 0) {
         perror("Connection error\n");
     }
+    printf("Connection established\n");
     return fd;
 }
 
@@ -58,8 +59,8 @@ void handleReceiver(const char *filename) {
     }
 
     int fileSize = 0;
-    unsigned char *fileName = read_control_packet(buffer, bytesRead, &fileSize);
-    //printf("fileNmae: %s\n", fileName); ///fileName is catching weird characters
+    read_control_packet(buffer, bytesRead, &fileSize);
+
 
     FILE *file = fopen((char*)filename, "wb");
     if (file == NULL) {
@@ -85,6 +86,7 @@ unsigned char* readFileData(const char *filename, int *fileSize) {
         fclose(file);
         return NULL;
     }
+    printf("File read \n");
     
     *fileSize = st.st_size;
     unsigned char *data = (unsigned char*)malloc(*fileSize);
@@ -140,8 +142,8 @@ void receiveDataPackets(FILE *file) {
             printf("Received END control packet\n");
             transmissionTerminated = 1;
         } else {
+            //se fosse write() o ficheiro ia abrir sempre. é mais eficiente assim
             fwrite(buffer + 4, 1, bytesRead - 4, file);
-            printf("Received data packet\n");
         }
     }
 }
@@ -176,7 +178,7 @@ unsigned char* build_control_packet(int control_field, int fileSize, const char*
 }
 
 
-unsigned char * read_control_packet(unsigned char* controlpacket,int packetSize,int* fileSize){
+void read_control_packet(unsigned char* controlpacket,int packetSize,int* fileSize){
     unsigned char number_bytes_file = controlpacket[2];
     unsigned char bytes_size[number_bytes_file]; 
     memcpy(bytes_size,controlpacket+3,number_bytes_file);
@@ -186,8 +188,6 @@ unsigned char * read_control_packet(unsigned char* controlpacket,int packetSize,
     }
     *fileSize = result;
     printf("Nr of bytes: %d\n", result);
-    unsigned char* m = &controlpacket[3+number_bytes_file+2];
-    return m;
 }
 
 unsigned char * build_data_packet(unsigned char sequence, unsigned char *data_field, int dataFieldSize){

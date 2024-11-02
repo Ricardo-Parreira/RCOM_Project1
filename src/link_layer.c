@@ -17,8 +17,7 @@
 #define _POSIX_SOURCE 1 // POSIX compliant source
 
 clock_t start;
-int received_bits = 0;
-int sent_bits = 0;
+int sent_bytes = 0;
 extern int fd;
 LinkLayerRole role;
 char serialPort[50];
@@ -290,14 +289,13 @@ int llwrite(const unsigned char *buf, int bufSize) {
             rejeitado = 0;
             alarm(timeout); 
             alarmEnabled = TRUE;
-            sent_bits += frame_size * 8;
+            sent_bytes += frame_size;
         }
 
         int ackStatus = checkAckFrame(&Cbyte);
         if (ackStatus == 1) { 
             aceite = 1;
             frame_sequence = (frame_sequence + 1) % 2;
-            received_bits += frame_size * 8;
         }
         else if (ackStatus == 0) {
             rejeitado = 1;
@@ -417,6 +415,7 @@ int llread(unsigned char *packet) {
                             free(destuffedData);
                             state = LIDO;
                             dataIndex = destuffedSize;
+                            printf("BCC matches\n");
                         } else {
                             free(destuffedData);
                             CResponse = (frame_sequence == 0) ? C_REJ_0 : C_REJ_1;
@@ -443,7 +442,7 @@ int llread(unsigned char *packet) {
     CResponse = (frame_sequence == 0) ? C_RR_0 : C_RR_1;
     unsigned char frame[5] = {FLAG, Aread, CResponse, Aread ^ CResponse, FLAG};
     write(fd, frame, 5);
-    printf("Frame received successfully!\n");
+    printf("Frame read!\n");
     return dataIndex;
 }
 
@@ -507,12 +506,9 @@ int llclose(int showStatistics)
                         printf("Baudrate: %i\n", baudRate);
                         printf("Total elapsed time: %f seconds\n", duration);
                         printf("Count of rejected frames: %i\n", error_count);
-                        double sent_rate = sent_bits / duration;
-                        double received_rate = received_bits / duration;
-                        printf("Total bits received: %i\n", received_bits);
-                        printf("Reception rate (bits/sec): %f\n", received_rate);
-                        printf("Total bits sent: %i\n", sent_bits);
-                        printf("Transmission rate (bits/sec): %f\n", sent_rate);
+                        double sent_rate = sent_bytes / duration;
+                        printf("Total bits sent: %i\n", sent_bytes);
+                        printf("Transmission speed (bits/sec): %f\n", sent_rate);
                         printf("Connection terminated.\n");
                     }
                 

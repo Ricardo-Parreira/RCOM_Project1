@@ -159,18 +159,18 @@ unsigned char* build_control_packet(int control_field, int fileSize, const char*
         return NULL;
     }
 
-    int offset = 0;
+    int index = 0;
 
-    controlpacket[offset++] = control_field; 
+    controlpacket[index++] = control_field; 
 
-    controlpacket[offset++] = 0x00;              //T1
-    controlpacket[offset++] = sizeof(int);       //L1
-    memcpy(&controlpacket[offset], &fileSize, sizeof(int)); //V1 (filesize)
-    offset += sizeof(int);
+    controlpacket[index++] = 0x00;              //T1
+    controlpacket[index++] = sizeof(int);       //L1
+    memcpy(&controlpacket[index], &fileSize, sizeof(int)); //V1 (filesize)
+    index += sizeof(int);
 
-    controlpacket[offset++] = 0x01;             //T2
-    controlpacket[offset++] = fileNameLen;      //L2
-    memcpy(&controlpacket[offset], fileName, fileNameLen);  //V2 (filename)
+    controlpacket[index++] = 0x01;             //T2
+    controlpacket[index++] = fileNameLen;      //L2
+    memcpy(&controlpacket[index], fileName, fileNameLen);  //V2 (filename)
 
     return controlpacket;
 }
@@ -185,7 +185,7 @@ unsigned char * read_control_packet(unsigned char* controlpacket,int packetSize,
         result |= bytes_size[i] << (8 * i); 
     }
     *fileSize = result;
-    printf("Number of bytes: %d\n", result);
+    printf("Nr of bytes: %d\n", result);
     unsigned char* m = &controlpacket[3+number_bytes_file+2];
     return m;
 }

@@ -33,7 +33,6 @@ typedef enum
     C_RECEBIDO,
     BCC_RECEBIDO, 
     LIDO,
-    ESC_RECEBIDO
 } State;
 typedef struct
 {

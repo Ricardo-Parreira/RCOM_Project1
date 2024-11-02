@@ -52,14 +52,8 @@ void handleTransmitter(const char *filename) {
 void handleReceiver(const char *filename) {
     unsigned char buffer[MAX_PAYLOAD_SIZE];
     int bytesRead = llread(buffer);
-
-    if (bytesRead < 0) {
-        perror("[ERROR] Initial control packet reception failed\n");
-        exit(-1);
-    }
-
     int fileSize = 0;
-    read_control_packet(buffer, bytesRead, &fileSize);
+    *buffer = read_control_packet(bytesRead, &fileSize);
 
 
     FILE *file = fopen((char*)filename, "wb");
@@ -178,7 +172,8 @@ unsigned char* build_control_packet(int control_field, int fileSize, const char*
 }
 
 
-void read_control_packet(unsigned char* controlpacket,int packetSize,int* fileSize){
+unsigned char * read_control_packet(int packetSize,int* fileSize){
+    unsigned char* controlpacket[MAX_PAYLOAD_SIZE];
     unsigned char number_bytes_file = controlpacket[2];
     unsigned char bytes_size[number_bytes_file]; 
     memcpy(bytes_size,controlpacket+3,number_bytes_file);
@@ -186,6 +181,7 @@ void read_control_packet(unsigned char* controlpacket,int packetSize,int* fileSi
     for (int i = 0; i < number_bytes_file; ++i) {
         result |= bytes_size[i] << (8 * i); 
     }
+    return controlpacket;
     *fileSize = result;
     printf("Nr of bytes: %d\n", result);
 }

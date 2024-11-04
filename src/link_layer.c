@@ -1,724 +1,512 @@
 // Link layer protocol implementation
-#include "application_helper.h"
-#include "application_layer.h"
-#include "link_layer.h"
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <termios.h>
+#include <unistd.h>
 #include <signal.h>
-#define BAUDRATE 38400
+
+
+#include "link_layer.h"
+#include "serial_port.h"
 
 // MISC
-int alarmEnabled = FALSE;
+#define _POSIX_SOURCE 1 // POSIX compliant source
+
+
+
+#define FLAG 0x7E
+
+#define Awrite 0x03
+#define CSet 0x03
+#define BCC1w (Awrite ^ CSet)
+
+//disconnect 
+#define DISC 0x0B
+
+#define Aread 0x01
+#define CUA 0x07
+#define BCC1r (Aread ^ CUA)
+#define BCC1_DISC (Awrite ^ DISC)
+
+#define MAX_FRAME_SIZE 512
+
+//destuffing
+#define ESCAPE_BYTE 0x7D
+#define STUFFING_MASK 0x20
+
+
+
+LinkLayerRole role;
+extern int fd;
+int alarmEnabled = 0;
 int alarmCount = 0;
-int timeout = 0;
-int nRetransmissions = 0;
-extern struct termios oldtio;
-struct timespec initial_time, final_time;
-int dataErrors = 0;
-unsigned char frameNumberTransmiter = 0;
-unsigned char frameNumberReceiver = 0;
-int accept = 0;
-int BCC_error = 0;
-int totalBits = 0;
-int sendedBits = 0;
+
+char bitTx = 0;
+int retransmissions = 0;
+int timeout = 3;
+
+
+// Alarm function handler
+void alarmHandler(int signal)
+{   
+    printf("Alarm triggered!\n");
+    alarmEnabled = 1;//TRUE;
+    alarmCount++;
+
+    printf("Alarm #%d\n", alarmCount);
+}
+
+void setConnectionParameters(LinkLayer connectionParameters) {
+    timeout = connectionParameters.timeout;
+    retransmissions = connectionParameters.nRetransmissions;
+    role = connectionParameters.role;
+    fd = openSerialPort(connectionParameters.serialPort, connectionParameters.baudRate);
+}
 
 ////////////////////////////////////////////////
 // LLOPEN
 ////////////////////////////////////////////////
-int llopen(LinkLayer connectionParameters)
-{
 
-    (void) signal(SIGALRM, alarmHandler);
- 
-    // check connection
-    int fd = set_serial_port(connectionParameters);
+
+unsigned char byte;
+
+int llopen(LinkLayer connectionParameters){
+    alarmCount=0;
+
+    LinkLayerState state = START;
+    setConnectionParameters(connectionParameters);
+
     if (fd < 0) return -1;
 
-    LinkLayerStateMachine state = START;
-
-   
-    switch (connectionParameters.role) {
-
-        case LlTx: {
-   
-            startClock();
-            state = transmiter_state_machine(fd,state);
-            if (state != STOP){
-                llclose(fd);
-                return -1;
-            }
-
-            break;  
-        }
-
-        case LlRx: {
-            receiver_state_machine(fd,state);
-            unsigned char UA[5] = {FLAG, A_RE, C_UA, A_RE ^ C_UA, FLAG};
-            write(fd, UA, 5);
-            break; 
-        }
-
-        default:
-            return -1;
-    }
+    // Configure signal handler for retransmission
+    signal(SIGALRM, alarmHandler);
     
-    return fd;
+
+    // Role-based behavior
+    if (role == LlTx) {
+        while (retransmissions > 0) {
+            unsigned char supFrame[5] = {FLAG, Awrite, CSet, BCC1w, FLAG};
+            write(fd, supFrame, 5);
+            alarm(timeout);
+            alarmEnabled = 0;
+
+            while (!alarmEnabled && state != READ) {
+                if (read(fd, &byte, 1) > 0) {
+                    switch (state) {
+                        case START:
+                            state = (byte == FLAG) ? FLAG_RCV : START;
+                            break;
+                        case FLAG_RCV:
+                            state = (byte == Aread) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
+                            break;
+                        case A_RCV:
+                            state = (byte == CUA) ? C_RCV : (byte == FLAG ? FLAG_RCV : START);
+                            break;
+                        case C_RCV:
+                            state = (byte == BCC1r) ? BCC1_OK : START;
+                            break;
+                        case BCC1_OK:
+                            state = (byte == FLAG) ? READ : START;
+                            break;
+                        default:
+                            break;
+                    }
+                }
+            }
+            if (state == READ) return fd;
+            retransmissions--;
+        }
+        return -1;  // Failed to connect as transmitter
+    } else if (role == LlRx) {
+        while (state != READ) {
+            if (read(fd, &byte, 1) > 0) {
+                switch (state) {
+                    case START:
+                        state = (byte == FLAG) ? FLAG_RCV : START;
+                        break;
+                    case FLAG_RCV:
+                        state = (byte == Awrite) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
+                        break;
+                    case A_RCV:
+                        state = (byte == CSet) ? C_RCV : (byte == FLAG ? FLAG_RCV : START);
+                        break;
+                    case C_RCV:
+                        state = (byte == BCC1w) ? BCC1_OK : START;
+                        break;
+                    case BCC1_OK:
+                        state = (byte == FLAG) ? READ : START;
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+        unsigned char supFrame[5] = {FLAG, Aread, CUA, BCC1r, FLAG};
+        write(fd, supFrame, 5);
+        return fd;
+    }
+    return -1;
 }
 
-   
-
-
-////////////////////////////////////////////////
-// LLWRITE
-////////////////////////////////////////////////
-int llwrite(int fd, const unsigned char *buf, int bufSize) {
-    int current_size = bufSize + 6;
-    unsigned char *information_frame = (unsigned char *) malloc(current_size);
-    if (!information_frame) {
-        perror("Failed to allocate memory");
-        return -1;
-    }
-
-    // Set up initial bytes in the information frame
-    information_frame[0] = FLAG;
-    information_frame[1] = A_ER;
-    information_frame[2] = C_N(frameNumberTransmiter);
-    information_frame[3] = information_frame[1] ^ information_frame[2];
-    
-    // Calculate BCC2
-    unsigned char BCC2 = buf[0];
-    for (int i = 1; i < bufSize; i++) {
-        BCC2 ^= buf[i];
-    }
-
-    // Copy data and perform byte stuffing
-    int current_index = 4;
-    for (int i = 0; i < bufSize; i++) {
-        if (buf[i] == FLAG || buf[i] == ESC) {
-            information_frame = realloc(information_frame, ++current_size);
-            information_frame[current_index++] = ESC;
-            information_frame[current_index++] = buf[i] ^ 0x20;
-        } else {
-            information_frame[current_index++] = buf[i];
+// -------- AUXILIARY TO LLWRITE 
+int byteStuffing(const unsigned char *frame, int frameSize, unsigned char *stuffedData){
+    int j = 0;
+    for (int i = 0; i < frameSize; i++) {
+        if (frame[i] == 0x7E) {
+            stuffedData[j] = 0x7D;
+            j++;
+            stuffedData[j] = 0x5E;
+            j++;
+        } 
+        else if (frame[i] == 0x7D) {
+            stuffedData[j] = 0x7D;
+            j++;
+            stuffedData[j] = 0x5D;
+            j++;
+        } 
+        else {
+            stuffedData[j] = frame[i];
+            j++;
         }
     }
+    return j;
+}
 
-    // Byte-stuff BCC2 if necessary
-    if (BCC2 == FLAG || BCC2 == ESC) {
-        information_frame = realloc(information_frame, ++current_size);
-        information_frame[current_index++] = ESC;
-        information_frame[current_index++] = BCC2 ^ 0x20;
-    } else {
-        information_frame[current_index++] = BCC2;
+//máquina de estados para ler o acknoldege frame    
+unsigned char readAckFrame(int fd){
+
+    unsigned char byte, cByte = 0;
+    LinkLayerState state = START;
+    
+    while (state != READ && alarmEnabled == FALSE) {  
+        if (read(fd, &byte, 1) > 0) {
+            printf("byte: %02X \n", byte);
+            switch (state) {
+                case START:
+                    if (byte == FLAG) state = FLAG_RCV;
+                    break;
+
+                case FLAG_RCV:
+                    if (byte == Aread) state = A_RCV;
+                    else if (byte != FLAG) state = START;
+                    break;
+
+                case A_RCV:
+                    if (byte == 0xAA || byte == 0xAB || byte == 0x54 || byte == 0x55 || byte == DISC) {
+                        state = C_RCV;
+                        
+                        cByte = byte; // Store the control byte
+                    } else if (byte == FLAG) {
+                        state = FLAG_RCV;
+                    } else {
+                        state = START;
+                    }
+                    break;
+
+                case C_RCV:
+                    
+                    if (byte == (Aread ^ cByte)) {
+                        state = BCC1_OK;
+                    } else if (byte == FLAG) {
+                        state = FLAG_RCV;
+                    } else {
+                        state = START;
+                    }
+                    break;
+
+                case BCC1_OK:
+                printf("a puta passou \n");
+                    if (byte == FLAG) {
+                        state = READ;
+                    } else {
+                        state = START;
+                    }
+                    break;
+
+                default:
+                    break;
+            }
+        }
+    }
+    printf("byte passado: %02X \n", cByte);
+    return (state == READ) ? cByte : 0;
+}
+
+// Helper function to perform byte de-stuffing
+int byteDeStuffing(const unsigned char *stuffedData, int stuffedSize, unsigned char *dest) {
+    int j = 0; // Index for dest (de-stuffed data)
+    for (int i = 0; i < stuffedSize; i++) {
+        if (stuffedData[i] == 0x7D) { // Check for escape byte
+            i++; // Move to the next byte after 0x7D
+            if (stuffedData[i] == 0x5E) {
+                dest[j] = 0x7E; // Replace 0x7D 0x5E with 0x7E
+            } 
+            else if (stuffedData[i] == 0x5D) {
+                dest[j] = 0x7D; // Replace 0x7D 0x5D with 0x7D
+            }
+        } 
+        else {
+            dest[j] = stuffedData[i]; // Copy normal byte
+        }
+        j++;
+    }
+    return j; // Return the size of de-stuffed data
+}
+
+
+int llwrite(const unsigned char *buf, int bufSize)
+{
+    unsigned char frame[MAX_FRAME_SIZE];
+    //int fd = openSerialPort(connectionParameters.serialPort,connectionParameters.baudRate);
+    //if (fd < 0) return -1;
+    int frameSize = bufSize + 6;
+    //unsigned char *frame = (unsigned char*) malloc(frameSize);
+    frame[0] = FLAG;
+    frame[1] = Awrite;
+    frame[2] = bitTx << 7; //nao sei se é 6 ou 7 | later bitTx = (bitTx++)%2
+    frame[3] = frame[1] ^ frame[2];
+
+
+    signal(SIGALRM, alarmHandler);
+
+    
+    //Passa todos os bytes do buf para o frame (a partir do byte 4) 
+    for (int i = 0; i < bufSize; i++){
+        frame[i+4] = buf[i];
     }
 
-    // Add final FLAG byte
-    information_frame[current_index++] = FLAG;
+    //calcula o bcc2
+    u_int8_t bcc2 = buf[0];
+    for(int i = 1; i< bufSize; i++){
+        bcc2 = bcc2 ^ buf[i];
+    }
 
-    // Initialize variables for transmission and state machine
-    alarmCount = 0;
-    int accepted = 0, rejected = 0;
-    unsigned char byte = '\0';
-    LinkLayerStateMachine current_state = START;
+    //STUFFING (swapping 0x7E for 0x7D 0x5E and 0x7D for 0x7D 0x5D)
+    unsigned char stuffedFrame[MAX_PAYLOAD_SIZE*2 + 6];
+    int stuffedFrameSize = byteStuffing(frame+1, frameSize-2, stuffedFrame);
 
-    while (alarmCount < nRetransmissions) {
-        // Enable alarm for timeout and reset state
-        alarmEnabled = TRUE;
+    memcpy(frame + 4, stuffedFrame, stuffedFrameSize);
+    frame[stuffedFrameSize+4] = bcc2;
+    frame[stuffedFrameSize+5] = FLAG;
+
+    int aceite = 0;
+    int rejeitado = 0;
+    int transmission = 0;
+    
+    while (transmission < retransmissions) {
+        alarmEnabled = FALSE;
         alarm(timeout);
-        accepted = 0;
-        rejected = 0;
+        aceite = 0;
+        rejeitado = 0;
 
-        // Send frame and handle response
-        int written_bytes = write(fd, information_frame, current_index);
-        if (written_bytes < 0) {
-            perror("Failed to write data");
-            return -1;
-        }
-        sendedBits += bufSize * 8;
-
-        // Process response using state machine
-        while (alarmEnabled && !accepted && !rejected) {
-            unsigned char response = control_frame_state_machine(fd, byte, current_state);
-            
-            if (response == C_RR(0) || response == C_RR(1)) {
-                accepted = 1;
-                frameNumberTransmiter = (frameNumberTransmiter + 1) % 2;
-                alarm(0);
-                totalBits += bufSize * 8;
-            } else if (response == C_REJ(0) || response == C_REJ(1)) {
-                rejected = 1;
-                dataErrors++;
+        while (!alarmEnabled && !rejeitado && !aceite) {
+            write(fd, frame, stuffedFrameSize + 6);
+            unsigned char check = readAckFrame(fd);
+            printf("check: %d\n", check);
+            if (check == 0x54 || check == 0x55) {
+                rejeitado = 1;
+            } else if (check == 0xAA || check == 0xAB) {
+                aceite = 1;
+                bitTx = (bitTx + 1) % 2;
+            } else {
+                continue;
             }
         }
-
-        if (accepted) {
-            alarmCount = nRetransmissions;
-        } else if (rejected) {
-            alarmCount++;
-        }
+        if (aceite) break;
+        transmission++;
     }
 
-    if (accepted) {
-        return current_index;
-    } else {
-        llclose(fd);
+    //free(frame);
+
+    if (aceite) return frameSize;
+    
+    printf("Sending frame: ");
+    for (int i = 0; i < bufSize; i++) {
+        printf("%02X ", frame[i]);
+    }
+    printf("\n");
+
+    int bytesWritten = write(fd, frame, bufSize);
+    if (bytesWritten < 0) {
+        perror("Write error");
         return -1;
     }
+    return bytesWritten;  // Return number of bytes written
 }
-
 
 ////////////////////////////////////////////////
 // LLREAD
 ////////////////////////////////////////////////
-int llread(int fd, unsigned char *packet)
+int llread(unsigned char *packet)
 {
-
-    unsigned char byte, control_field;
-    LinkLayerStateMachine current_state = START;
-    int current_index = 0;
+    unsigned char frame[MAX_FRAME_SIZE];
+    LinkLayerState state = START;
+    unsigned char byte;
+    int dataIndex = 0;
     
-    while (current_state != STOP){
-        if (read(fd, &byte, 1) > 0){
+
+    while (state != STOP) {
+        if (read(fd, &byte, 1) > 0) {
+            printf("Read byte: %02X, State: %d\n", byte, state); // Debug print
+            switch (state) {
+            case START:
+                if (byte == FLAG) state = FLAG_RCV;
+                break;
+            case FLAG_RCV:
+                if (byte == Awrite) state = A_RCV;
+                else if (byte != FLAG) state = START;
+                break;
+            case A_RCV:
+                if ((byte == 0x00) || (byte == 0x40)) {
+                    state = C_RCV;
+                } else if (byte == FLAG) state = FLAG_RCV;
+                else state = START;
+                break;
+            case C_RCV:
+                if (byte == (Awrite ^ 0x00) || byte == (Awrite ^ 0x40)) {
+                    state = BCC1_OK;
+                } else if (byte == FLAG) state = FLAG_RCV;
+                else state = START;
+                break;
+            case BCC1_OK:
+                if (byte == FLAG) {
+                    state = STOP;
+                } else {
+                    frame[dataIndex++] = byte;
+                }
+                break;
+            case READ:
+            case DATA:
+            case STOP:
                 
-            switch (current_state) {
-                case START:
-                    
-                    if (byte == FLAG) current_state = FLAG_RCV;
-                    break;
-                
-                case FLAG_RCV:
-
-                    if (byte == A_ER) current_state = A_RCV;
-                    else if (byte != FLAG) current_state = START;
-                    break;
-
-                case A_RCV:
-
-                    if (byte == C_N(frameNumberReceiver)){
-
-                        current_state = C_RCV;
-                        control_field = byte;
-
-                    }
-                    else if (byte == C_N((frameNumberReceiver+1)%2)){
-                        unsigned char ACCEPTED[5] = {FLAG, A_RE, C_RR((frameNumberReceiver+1)%2), A_RE ^ C_RR((frameNumberReceiver+1)%2), FLAG};
-                        write(fd, ACCEPTED, 5);
-                        return 0;
-                    }
-                    else if (byte == FLAG) current_state = FLAG_RCV;
-                    else if (byte == C_DISC){
-                        unsigned char DISC[5] = {FLAG, A_RE, C_DISC, A_RE ^ C_DISC, FLAG};
-                        write(fd, DISC, 5);
-                        if (tcsetattr(fd, TCSANOW, &oldtio) == -1){
-                            perror("tcsetattr");
-                            exit(-1);
-                        }
-    
-                        return close(fd);
-
-                    }
-                    else current_state = START;
-                    break;
-                
-                case C_RCV:
-                    
-                    if (byte == (A_ER ^ control_field)){
-                        current_state = DATA;
-                    }
-                    else if (byte == FLAG) current_state = FLAG_RCV;
-                    else current_state = START;
-                    break;
-                
-                case DATA:
-                    if (byte == ESC) current_state = STUFFEDBYTES;
-                    else if (byte == FLAG){
-
-                        
-                        unsigned char bcc2 = packet[current_index-1];
-                        current_index--;
-                        packet[current_index] = '\0';
-                        unsigned char bcc2_test = packet[0];
-
-                        for (unsigned int i = 1; i < current_index; i++){
-
-                            bcc2_test ^= packet[i];
-
-                        }
-
-                        if (bcc2 == bcc2_test){
-                            if (accept == 0 && BCC_error==1){
-     
-                                unsigned char REJECTED[5] = {FLAG, A_RE, C_REJ(frameNumberReceiver), A_RE ^ C_REJ(frameNumberReceiver), FLAG};
-                                write(fd, REJECTED, 5);
-                                accept = 1;
-                                return -1;
-                        
-                            }
-    
-                            current_state = STOP;
-                            unsigned char ACCEPTED[5] = {FLAG, A_RE, C_RR(frameNumberReceiver), A_RE ^ C_RR(frameNumberReceiver), FLAG};
-                            write(fd, ACCEPTED, 5);
-                            frameNumberReceiver = (frameNumberReceiver + 1)%2;
-                            accept = 0;
-                            return current_index;
-                            
-                        }
-
-                        else{
-
-                            unsigned char REJECTED[5] = {FLAG, A_RE, C_REJ(frameNumberReceiver), A_RE ^ C_REJ(frameNumberReceiver), FLAG};
-                            write(fd, REJECTED, 5);
-                            return -1;
-
-                        }
-                    }
-                    else{
-                        packet[current_index++] = byte;
-                    }
-                    break;
-                case STUFFEDBYTES:
-                    current_state = DATA;
-                    packet[current_index++] = (byte^0x20);
-                    break;
-                default:
-                    break;
-
+                break;
             }
         }
-
     }
 
-    return -1;
+    // Desfazer byte stuffing
+    int deStuffedSize = byteDeStuffing(frame, dataIndex, packet);
+
+    if (deStuffedSize < 0) {
+        // Handle error in de-stuffing
+        unsigned char rej[5] = {FLAG, Aread, 0x54, Aread ^ 0x54, FLAG};
+        write(fd, rej, 5);
+        return -1;
+    }
+
+    // Calculate BCC2 for the de-stuffed data
+    unsigned char calculatedBCC2 = 0;
+    for (int i = 0; i < deStuffedSize - 1; i++) {
+        calculatedBCC2 ^= packet[i];
+    }
+
+    if (calculatedBCC2 != packet[deStuffedSize - 1]) {
+        // Send REJ if BCC2 does not match
+        unsigned char rej[5] = {FLAG, Aread, 0x54, Aread ^ 0x54, FLAG};
+        write(fd, rej, 5);
+        return -1;
+    } else {
+        // Send RR if BCC2 matches
+        unsigned char rr[5] = {FLAG, Aread, 0xAA, Aread ^ 0xAA, FLAG};
+        write(fd, rr, 5);
+    }
+
+    // Return the size of the de-stuffed data excluding the BCC2 byte
+    return deStuffedSize - 1;
 }
 
 ////////////////////////////////////////////////
 // LLCLOSE
 ////////////////////////////////////////////////
-int llclose(int showStatistics)
-{
-
-    LinkLayerStateMachine current_state=START;
+int llclose(int showStatistics) {
+    LinkLayerState state = START;
     unsigned char byte;
-    alarmEnabled = TRUE;
     alarmCount = 0;
-
-    while (alarmCount < nRetransmissions && current_state!=STOP){
-
-        unsigned char DISC[5] = {FLAG, A_ER, C_DISC, A_ER ^ C_DISC, FLAG};
-        write(showStatistics, DISC, 5);
-        alarm(timeout);
-        alarmEnabled = TRUE;
-        while (alarmEnabled == TRUE && current_state!=STOP){
-            if (read(showStatistics, &byte,1) > 0){
-                    switch (current_state) {
-
-                        case START:
-
-                            if (byte == FLAG){
-
-                                current_state = FLAG_RCV;
-                            }
-
-                            break;
-                        case FLAG_RCV:
-
-                            if (byte == A_RE){
-                                current_state = A_RCV;
-                            }
-
-                            else if (byte != FLAG) current_state = START;
-
-                            break;
-
-                        case A_RCV:
-
-                            if (byte == C_DISC){
-                                current_state = C_RCV;
-                            }
-
-                            else if (byte == FLAG){
-                                current_state = FLAG_RCV;
-                            }
-
-                            else current_state = START;
-
-                            break;
-
-                        case C_RCV:
-
-                            if (byte == (A_RE ^ C_DISC)){
-                                current_state = BCC_OK;
-                            }
-
-                            else if (byte == FLAG){
-                                current_state = FLAG_RCV;
-                            }
-
-                            else current_state = START;
-
-                            break;
-                        case BCC_OK:
-
-                            if (byte == FLAG){
-                                current_state = STOP;
-                                alarm(0);
-                            }
-
-                            else current_state = START;
-
-                            break;
-
-                        default: 
-
-                            break;
-                    }   
-            }
-        }
-    }
-    double elapsedTime = endClock();
-    printf("Elpased Time: %f seconds\n",elapsedTime);
-    printf("Number of rejected frames: %i\n",dataErrors);
-    double linkCapacity = sendedBits/elapsedTime;
-    double receivedBitrait = totalBits/elapsedTime;
-    printf("Bits received per second: %f\n", receivedBitrait);
-    printf("Bits sended per second %f\n", linkCapacity);
-
-    if (current_state != STOP){
-        
-        if (tcsetattr(showStatistics, TCSANOW, &oldtio) == -1){
-            perror("tcsetattr");
-            exit(-1);
-        }
-        
-        close(showStatistics);
-        
-        perror("Receiver didn't disconnect\n");
-           
-        return -1;
-    }
-    unsigned char UA[5] = {FLAG, A_ER, C_UA, A_ER ^ C_UA, FLAG};
-    write(showStatistics, UA, 5);
-
-    if (tcsetattr(showStatistics, TCSANOW, &oldtio) == -1){
-            perror("tcsetattr");
-            exit(-1);
-    }
     
-    return close(showStatistics);
-}
 
+    if (role == LlTx) {  // Transmitter (Tx)
+        int retries = retransmissions;
+        while (retries > 0) {
+            // send frame DISC
+            unsigned char discFrame[5] = {FLAG, Awrite, DISC, BCC1_DISC, FLAG};
+            write(fd, discFrame, 5);
+            alarm(timeout);
+            alarmEnabled = 0;
 
-//alarm handler
-void alarmHandler(int signal) {
-    alarmEnabled = FALSE;
-    alarmCount++;
-    printf("Alarm #%d\n", alarmCount);
-}
-
-// receiver state machine to validate SET
-void receiver_state_machine(int fd, LinkLayerStateMachine current_state){
-
-       unsigned char byte;
-
-       while (current_state != STOP) {
+            // waiting for UA from Rx
+            while (!alarmEnabled && state != READ) {
                 if (read(fd, &byte, 1) > 0) {
-                 
-                    
-                    switch (current_state) {
-
+                    switch (state) {
                         case START:
-
-                            if (byte == FLAG){
-                                current_state = FLAG_RCV;
-                            }
-
+                            state = (byte == FLAG) ? FLAG_RCV : START;
                             break;
                         case FLAG_RCV:
-
-                            if (byte == A_ER){
-                                current_state = A_RCV;
-                            }
-
-                            else if (byte != FLAG) current_state = START;
-
+                            state = (byte == Aread) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
                             break;
-
                         case A_RCV:
-
-                            if (byte == C_SET){
-                                current_state = C_RCV;
-                            }
-
-                            else if (byte == FLAG){
-                                current_state = FLAG_RCV;
-                            }
-
-                            else current_state = START;
-
+                            state = (byte == CUA) ? C_RCV : START;
                             break;
-
                         case C_RCV:
-
-                            if (byte == (A_ER ^ C_SET)){
-                                current_state = BCC_OK;
-                            }
-
-                            else if (byte == FLAG){
-                                current_state = FLAG_RCV;
-                            }
-
-                            else current_state = START;
-
+                            state = (byte == BCC1r) ? BCC1_OK : START;
                             break;
-                        case BCC_OK:
-
-                            if (byte == FLAG){
-                                current_state = STOP;
-                                alarm(0);
-                            }
-
-                            else current_state = START;
-
+                        case BCC1_OK:
+                            state = (byte == FLAG) ? READ : START;
                             break;
-
-                        default: 
-
+                        default:
                             break;
                     }
                 }
-            }  
-  
-}
-
-
-//trasmiter state machine to validade UA
-LinkLayerStateMachine transmiter_state_machine(int fd,LinkLayerStateMachine current_state){
-
-   unsigned char byte;
-   while (alarmCount < nRetransmissions && current_state != STOP) {
-                unsigned char SET[5] = {FLAG, A_ER, C_SET, A_ER ^ C_SET, FLAG};
-                write(fd, SET, 5);
-                alarmEnabled = TRUE;
-                alarm(0);
-                alarm(timeout);
-                
-                while (alarmEnabled == TRUE && current_state != STOP) {
-
-                    if (read(fd, &byte, 1) > 0) {
-                      
-                        switch (current_state) {
-
-                            case START:
-
-                                if (byte == FLAG){
-                                    current_state = FLAG_RCV;
-                                }
-
-                                break;
-
-                            case FLAG_RCV:
-
-                                if (byte == A_RE){
-                                    current_state = A_RCV;
-                                } 
-
-                                else if (byte != FLAG){
-                                    current_state = START;
-                                }
-                                break;
-
-                            case A_RCV:
-
-                                if (byte == C_UA){
-                                    current_state = C_RCV;
-                                } 
-                                else if (byte == FLAG){
-                                    current_state = FLAG_RCV;
-                                } 
-
-                                else current_state = START;
-
-                                break;
-
-                            case C_RCV:
-
-                                if (byte == (A_RE ^ C_UA)){
-                                    current_state = BCC_OK;
-                                } 
-
-                                else if (byte == FLAG){
-                                    current_state = FLAG_RCV;
-                                }
-
-                                else current_state = START;
-
-                                break;
-
-                            case BCC_OK:
-
-                                if (byte == FLAG){
-                                
-                                    current_state = STOP;
-                                    alarm(0);
-                                }
-
-                                else current_state = START;
-
-                                break;
-                            default: 
-                                break;
-                        }
-                    }
-                } 
-              
             }
-            return current_state;
-}
-
-int control_frame_state_machine(int fd, unsigned char byte, LinkLayerStateMachine state){
-
-    int answer = 0;
-    LinkLayerStateMachine current_state = START;
-    while (current_state != STOP && alarmEnabled == TRUE) { 
-        
-        if (read(fd, &byte, 1) > 0 ) {
-
-            switch (current_state){
-            case (START):{
-
-                if (byte == FLAG){
-                    current_state = FLAG_RCV;                     
+            if (state == READ) {
+                close(fd);
+                if (showStatistics) {
+                    printf("Connection closed successfully. Statistics: Retransmissions: %d, Alarms: %d\n", retransmissions, alarmCount);
                 }
-
-                break;
-
+                return 1;
             }
-            case (FLAG_RCV):{
-
-                if (byte == A_RE){
-                    current_state = A_RCV;
+            retries--;
+        }
+        return -1;  // fail to close
+    } else if (role == LlRx) {  // Receiver (Rx)
+        // wait to receive frame DISC do Tx
+        while (state != READ) {
+            if (read(fd, &byte, 1) > 0) {
+                switch (state) {
+                    case START:
+                        state = (byte == FLAG) ? FLAG_RCV : START;
+                        break;
+                    case FLAG_RCV:
+                        state = (byte == Awrite) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
+                        break;
+                    case A_RCV:
+                        state = (byte == DISC) ? C_RCV : START;
+                        break;
+                    case C_RCV:
+                        state = (byte == BCC1_DISC) ? BCC1_OK : START;
+                        break;
+                    case BCC1_OK:
+                        state = (byte == FLAG) ? READ : START;
+                        break;
+                    default:
+                        break;
                 }
-
-                else if (byte != FLAG){
-                    current_state = START;
-                }
-
-                break;
-
-            }
-
-            case (A_RCV):{
-
-                if (byte == C_RR(0) || byte == C_RR(1) || byte == C_REJ(0) || byte == C_REJ(1) ){
-                    current_state = C_RCV;
-                    answer = byte;
-
-                }
-
-                else if (byte == FLAG){
-                    current_state = FLAG_RCV;
-                }
-            
-                else{
-                    current_state = START;
-                }
-
-                break;
-
-            }
-
-            case (C_RCV):{
-
-                if (byte == (A_RE ^ answer)){
-                    current_state = BCC_OK;
-                }
-            
-                else if (byte == FLAG){
-                    current_state = FLAG_RCV;
-                }
-            
-                else{
-                    current_state = START;
-                }
-
-                break;
-            }
-
-            case (BCC_OK):{
-
-                if (byte == FLAG){
-                    current_state = STOP;
-                    alarm(0);
-                   
-
-                }
-
-                else{
-                    current_state = START;
-                }
-
-                break;
-
-            }
-
-            default:
-
-                break;
-
             }
         }
 
+        // send frame UA
+        unsigned char uaFrame[5] = {FLAG, Aread, CUA, BCC1r, FLAG};
+        write(fd, uaFrame, 5);
+
+        close(fd);
+        if (showStatistics) {
+            printf("Connection closed successfully. Statistics: Retransmissions: %d, Alarms: %d\n", retransmissions, alarmCount);
+        }
+        return 1;
     }
-    return answer;
-     
-}
 
-
-
-int set_serial_port(LinkLayer connectionParameters){
-
-    
-    int fd = open(connectionParameters.serialPort, O_RDWR | O_NOCTTY);
-    if (fd < 0){
-
-        perror(connectionParameters.serialPort);
-        exit(-1);
-    }
-    
-    nRetransmissions = connectionParameters.nRetransmissions;
-    timeout = connectionParameters.timeout;
-
-    struct termios newtio;
-    
-    if (tcgetattr(fd, &oldtio) == -1)
-    {
-        perror("tcgetattr");
-        exit(-1);
-    }
-    
-    memset(&newtio, 0, sizeof(newtio));
-
-    newtio.c_cflag = BAUDRATE | CS8 | CLOCAL | CREAD;
-    newtio.c_iflag = IGNPAR;
-    newtio.c_oflag = 0;
-    newtio.c_lflag = 0;
-    newtio.c_cc[VTIME] = 0;
-    newtio.c_cc[VMIN] = 0;
-
-    tcflush(fd, TCIOFLUSH);
-
-    if (tcsetattr(fd, TCSANOW, &newtio) == -1) {
-        perror("tcsetattr");
-        return -1;
-    }
-    return fd;
-}
-
-void startClock(){
-    clock_gettime(CLOCK_REALTIME, &initial_time);
-}
-
-double endClock(){
-  clock_gettime(CLOCK_REALTIME, &final_time);
-  double time_val = (final_time.tv_sec-initial_time.tv_sec)+
-					(final_time.tv_nsec- initial_time.tv_nsec)/1e9;
-  return time_val;
+    return -1;  // Caso de erro
 }

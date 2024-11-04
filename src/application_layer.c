@@ -2,192 +2,67 @@
 
 #include "application_layer.h"
 #include "link_layer.h"
-#include "application_helper.h"
-#include <math.h>
-
-LinkLayer connectionParameters;
-
+#include "string.h"
+#include <stdlib.h>
+#include <stdio.h>
 
 void applicationLayer(const char *serialPort, const char *role, int baudRate,
                       int nTries, int timeout, const char *filename)
 {
+    LinkLayer linkLayer;
+    strcpy(linkLayer.serialPort, serialPort);
+    linkLayer.role = strcmp(role, "tx") ? LlRx : LlTx;
+    linkLayer.baudRate = baudRate;
+    linkLayer.nRetransmissions = nTries;
+    linkLayer.timeout = timeout;
 
-    strcpy(connectionParameters.serialPort,serialPort);
-    if (strcmp(role,"tx")){
-           connectionParameters.role = LlRx;
+    int fd = llopen(linkLayer);
+    if (fd < 0){
+        perror("Connection error");
+        exit(-1);
     }
-    else{
-        connectionParameters.role = LlTx;
-    }
-    connectionParameters.baudRate = baudRate;
-    connectionParameters.nRetransmissions = nTries;
-    connectionParameters.timeout = timeout;
+    else (printf("llopen() works\n"));
 
-    
-    FILE *file;
+    // Testing llwrite
+    if (linkLayer.role == LlTx) {
+        printf("Testing llwrite...\n");
 
-    int fd = llopen(connectionParameters);
-    if(fd > 0){
-        perror("Llopen\n");
-    }
-    else return;
-    switch(connectionParameters.role){
+        const char *data = "Hello";
+        int bytesWritten = llwrite((unsigned char*)data, strlen(data));
 
-        case LlRx:{
-
-                file = fopen(filename,"wb+");
-                unsigned char *packet = (unsigned char *)malloc(MAX_PAYLOAD_SIZE);
-                if (file == NULL) {
-                perror("Failed to open file\n");
-                return;
-                }
-                printf("File opened for writing: %s\n", filename);
-                while(1){
-
-                    int packetSize = llread(fd, packet);
-                    if (packetSize>=0){
-                        break;
-                   } 
-                } 
-
-                while (1) {    
-                    
-                    int packetSize;
-                    while (1){
-                        packetSize = llread(fd, packet);
-                        if (packetSize>=0) break;
-                    }
-                        
-                    if(packetSize == 0) break;
-
-                    else if(packet[0] != 3){
-                        printf("Packet received\n");
-                        unsigned char *buffer = (unsigned char*)malloc(packetSize);
-                        removeHeaderData(packet, packetSize, buffer);
-                        fwrite(buffer, 1, packetSize-4, file);
-                        free(buffer);
-                    }
-                    else if (packet[0] == 3)
-                    {   
-                        printf("End packet received\n");
-                        break;
-                    }
-                    
-                    else break;
-                
-                }
-
-                 while(1){
-
-                    int packetSize = llread(fd, packet);
-                    if (packetSize>=0){
-                        break;
-                   } 
-                } 
-                printf("File received\n");
-
-                break;
-           
-
+        if (bytesWritten < 0) {
+            perror("llwrite failed");
+        } else {
+            printf("llwrite success: %d bytes written\n", bytesWritten);
         }
-        case LlTx: {
-
-            FILE* file = fopen(filename, "rb");
-    if (file == NULL) {
-        perror("Error opening file");
-        exit(EXIT_FAILURE);
     }
 
-    // Determine the file size
-    fseek(file, 0, SEEK_END); 
-    int fileSize = ftell(file); 
-    fseek(file, 0, SEEK_SET);
-    printf("File opened successfully: %s\n", filename);
-    printf("File size: %d bytes\n", fileSize);
+  
 
-    // Create and send start packet
-    unsigned int startPacketSize;
-    unsigned char* startPacket = parseControl(1, filename, fileSize, &startPacketSize);
-    if (llwrite(fd, startPacket, startPacketSize) == -1) { 
-        printf("Exit: error in start packet\n");
-        free(startPacket); 
-        fclose(file); 
-        exit(EXIT_FAILURE);
-    }
-    free(startPacket);
+    // Testing llread 
+    if (linkLayer.role == LlRx) {
+        printf("Testing llread...\n");
 
-    // Read file data
-    unsigned char* data = openFile(file, fileSize);
-    int bytesToSend = fileSize;
-    unsigned char frameNumber = 0;
+        unsigned char packet[MAX_FRAME_SIZE];  // Buffer for the received data
+        int bytesRead = llread(packet);
 
-    // Send file data in packets
-    while (bytesToSend > 0) { 
-        int byteSent = (bytesToSend < MAX_PAYLOAD_SIZE) ? bytesToSend : MAX_PAYLOAD_SIZE;
-
-        unsigned char* dataPacket = (unsigned char*)malloc(byteSent + 4);
-        if (dataPacket == NULL) {
-            perror("Memory allocation error");
-            free(data); 
-            fclose(file); 
-            exit(EXIT_FAILURE);
+        if (bytesRead < 0) {
+            perror("llread failed");
+        } else {
+            printf("llread success: %d bytes read\n", bytesRead);
+            printf("Received data: %s\n", packet+3);  // Assuming it's a string, for simplicity
+            for (int i = 0; i < bytesRead; i++) {
+    printf("%02X ", packet[i]);  // Print as hex
+}
+printf("\n");
         }
-
-        // Fill data packet header
-        dataPacket[0] = 2; // Packet type
-        dataPacket[1] = frameNumber; // Frame number
-        dataPacket[2] = (byteSent >> 8) & 0xFF; // High byte of size
-        dataPacket[3] = byteSent & 0xFF; // Low byte of size
-        memcpy(dataPacket + 4, data, byteSent); // Copy data into packet
-
-        // Send the data packet
-        if (llwrite(fd, dataPacket, byteSent + 4) == -1) {
-            printf("Exit: error in data packets\n");
-            free(dataPacket); 
-            free(data); 
-            fclose(file); 
-            exit(EXIT_FAILURE);
-        }
-
-        // Update counters
-        bytesToSend -= byteSent; 
-        data += byteSent; 
-        printf("Bytes sent: %d\n", byteSent);
-        frameNumber = (frameNumber + 1) % 255;   
-
-        free(dataPacket);
     }
-
-    // Create and send end packet
-    unsigned char* endPacket = parseControl(3, filename, fileSize, &startPacketSize);
-    if (llwrite(fd, endPacket, startPacketSize) == -1) { 
-        printf("Exit: error in end packet\n");
-        free(endPacket); 
-        free(data); 
-        fclose(file); 
-        exit(EXIT_FAILURE);
+    int fd1 = llclose(TRUE);
+    if (fd1 < 0) {
+        perror("Close error\n");
+        exit(-1);
     }
-    free(endPacket); 
+    else (printf("close works\n"));
 
-    printf("File sent\n");
-
-    // Close the file
-    fclose(file);
-    llclose(fd); 
-            break;
-
-           
-            
-        }
-        
-    default:
-        break;
-        
-    }
-    
-
-
-    fclose(file);
-    
 
 }

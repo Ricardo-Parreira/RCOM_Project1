@@ -14,9 +14,9 @@ typedef enum
 {
     START,
     READ,
-    FLAG_RCV,
-    A_RCV,
-    C_RCV,
+    FLAG_RECEIVED,
+    A_RECEIVED,
+    C_RECEIVED,
     BCC1_OK,
     DATA,
     STOP
@@ -50,6 +50,31 @@ typedef struct
 // MISC
 #define FALSE 0
 #define TRUE 1
+
+
+
+#define FLAG 0x7E
+
+#define Awrite 0x03
+#define CSet 0x03
+#define BCC1w (Awrite ^ CSet)
+
+//disconnect 
+#define DISC 0x0B
+
+#define Aread 0x01
+#define CUA 0x07
+#define BCC1r (Aread ^ CUA)
+#define BCC1_DISC (Awrite ^ DISC)
+#define C_I(n) n << 7
+#define C_RR(n) (0xAA | n)
+#define C_REJ(n) (0x54 | n) 
+
+#define MAX_FRAME_SIZE 512
+
+//destuffing
+#define ESCAPE_BYTE 0x7D
+#define STUFFING_MASK 0x20
 
 #define BUF_SIZE 256
 

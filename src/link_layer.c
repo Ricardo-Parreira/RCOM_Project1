@@ -18,28 +18,6 @@
 
 
 
-#define FLAG 0x7E
-
-#define Awrite 0x03
-#define CSet 0x03
-#define BCC1w (Awrite ^ CSet)
-
-//disconnect 
-#define DISC 0x0B
-
-#define Aread 0x01
-#define CUA 0x07
-#define BCC1r (Aread ^ CUA)
-#define BCC1_DISC (Awrite ^ DISC)
-
-#define MAX_FRAME_SIZE 512
-
-//destuffing
-#define ESCAPE_BYTE 0x7D
-#define STUFFING_MASK 0x20
-
-
-
 LinkLayerRole role;
 extern int fd;
 int alarmEnabled = 0;
@@ -98,15 +76,15 @@ int llopen(LinkLayer connectionParameters){
                 if (read(fd, &byte, 1) > 0) {
                     switch (state) {
                         case START:
-                            state = (byte == FLAG) ? FLAG_RCV : START;
+                            state = (byte == FLAG) ? FLAG_RECEIVED : START;
                             break;
-                        case FLAG_RCV:
-                            state = (byte == Aread) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
+                        case FLAG_RECEIVED:
+                            state = (byte == Aread) ? A_RECEIVED : (byte == FLAG ? FLAG_RECEIVED : START);
                             break;
-                        case A_RCV:
-                            state = (byte == CUA) ? C_RCV : (byte == FLAG ? FLAG_RCV : START);
+                        case A_RECEIVED:
+                            state = (byte == CUA) ? C_RECEIVED : (byte == FLAG ? FLAG_RECEIVED : START);
                             break;
-                        case C_RCV:
+                        case C_RECEIVED:
                             state = (byte == BCC1r) ? BCC1_OK : START;
                             break;
                         case BCC1_OK:
@@ -126,15 +104,15 @@ int llopen(LinkLayer connectionParameters){
             if (read(fd, &byte, 1) > 0) {
                 switch (state) {
                     case START:
-                        state = (byte == FLAG) ? FLAG_RCV : START;
+                        state = (byte == FLAG) ? FLAG_RECEIVED : START;
                         break;
-                    case FLAG_RCV:
-                        state = (byte == Awrite) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
+                    case FLAG_RECEIVED:
+                        state = (byte == Awrite) ? A_RECEIVED : (byte == FLAG ? FLAG_RECEIVED : START);
                         break;
-                    case A_RCV:
-                        state = (byte == CSet) ? C_RCV : (byte == FLAG ? FLAG_RCV : START);
+                    case A_RECEIVED:
+                        state = (byte == CSet) ? C_RECEIVED : (byte == FLAG ? FLAG_RECEIVED : START);
                         break;
-                    case C_RCV:
+                    case C_RECEIVED:
                         state = (byte == BCC1w) ? BCC1_OK : START;
                         break;
                     case BCC1_OK:
@@ -187,32 +165,32 @@ unsigned char readAckFrame(int fd){
             printf("byte: %02X \n", byte);
             switch (state) {
                 case START:
-                    if (byte == FLAG) state = FLAG_RCV;
+                    if (byte == FLAG) state = FLAG_RECEIVED;
                     break;
 
-                case FLAG_RCV:
-                    if (byte == Aread) state = A_RCV;
+                case FLAG_RECEIVED:
+                    if (byte == Aread) state = A_RECEIVED;
                     else if (byte != FLAG) state = START;
                     break;
 
-                case A_RCV:
-                    if (byte == 0xAA || byte == 0xAB || byte == 0x54 || byte == 0x55 || byte == DISC) {
-                        state = C_RCV;
+                case A_RECEIVED:
+                    if ((byte == C_RR(bitTx)) | (byte == C_REJ(bitTx))) {
+                        state = C_RECEIVED;
                         
                         cByte = byte; // Store the control byte
                     } else if (byte == FLAG) {
-                        state = FLAG_RCV;
+                        state = FLAG_RECEIVED;
                     } else {
                         state = START;
                     }
                     break;
 
-                case C_RCV:
+                case C_RECEIVED:
                     
                     if (byte == (Aread ^ cByte)) {
                         state = BCC1_OK;
                     } else if (byte == FLAG) {
-                        state = FLAG_RCV;
+                        state = FLAG_RECEIVED;
                     } else {
                         state = START;
                     }
@@ -354,22 +332,22 @@ int llread(unsigned char *packet)
             printf("Read byte: %02X, State: %d\n", byte, state); // Debug print
             switch (state) {
             case START:
-                if (byte == FLAG) state = FLAG_RCV;
+                if (byte == FLAG) state = FLAG_RECEIVED;
                 break;
-            case FLAG_RCV:
-                if (byte == Awrite) state = A_RCV;
+            case FLAG_RECEIVED:
+                if (byte == Awrite) state = A_RECEIVED;
                 else if (byte != FLAG) state = START;
                 break;
-            case A_RCV:
+            case A_RECEIVED:
                 if ((byte == 0x00) || (byte == 0x40)) {
-                    state = C_RCV;
-                } else if (byte == FLAG) state = FLAG_RCV;
+                    state = C_RECEIVED;
+                } else if (byte == FLAG) state = FLAG_RECEIVED;
                 else state = START;
                 break;
-            case C_RCV:
+            case C_RECEIVED:
                 if (byte == (Awrite ^ 0x00) || byte == (Awrite ^ 0x40)) {
                     state = BCC1_OK;
-                } else if (byte == FLAG) state = FLAG_RCV;
+                } else if (byte == FLAG) state = FLAG_RECEIVED;
                 else state = START;
                 break;
             case BCC1_OK:
@@ -393,7 +371,7 @@ int llread(unsigned char *packet)
 
     if (deStuffedSize < 0) {
         // Handle error in de-stuffing
-        unsigned char rej[5] = {FLAG, Aread, 0x54, Aread ^ 0x54, FLAG};
+        unsigned char rej[5] = {FLAG, Aread, C_REJ(bitTx), Aread ^ C_REJ(bitTx), FLAG};
         write(fd, rej, 5);
         return -1;
     }
@@ -406,12 +384,12 @@ int llread(unsigned char *packet)
 
     if (calculatedBCC2 != packet[deStuffedSize - 1]) {
         // Send REJ if BCC2 does not match
-        unsigned char rej[5] = {FLAG, Aread, 0x54, Aread ^ 0x54, FLAG};
+        unsigned char rej[5] = {FLAG, Aread, C_REJ(bitTx), Aread ^ C_REJ(bitTx), FLAG};
         write(fd, rej, 5);
         return -1;
     } else {
         // Send RR if BCC2 matches
-        unsigned char rr[5] = {FLAG, Aread, 0xAA, Aread ^ 0xAA, FLAG};
+        unsigned char rr[5] = {FLAG, Aread, C_RR(bitTx), Aread ^ C_RR(bitTx), FLAG};
         write(fd, rr, 5);
     }
 
@@ -442,15 +420,15 @@ int llclose(int showStatistics) {
                 if (read(fd, &byte, 1) > 0) {
                     switch (state) {
                         case START:
-                            state = (byte == FLAG) ? FLAG_RCV : START;
+                            state = (byte == FLAG) ? FLAG_RECEIVED : START;
                             break;
-                        case FLAG_RCV:
-                            state = (byte == Aread) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
+                        case FLAG_RECEIVED:
+                            state = (byte == Aread) ? A_RECEIVED : (byte == FLAG ? FLAG_RECEIVED : START);
                             break;
-                        case A_RCV:
-                            state = (byte == CUA) ? C_RCV : START;
+                        case A_RECEIVED:
+                            state = (byte == CUA) ? C_RECEIVED : START;
                             break;
-                        case C_RCV:
+                        case C_RECEIVED:
                             state = (byte == BCC1r) ? BCC1_OK : START;
                             break;
                         case BCC1_OK:
@@ -477,15 +455,15 @@ int llclose(int showStatistics) {
             if (read(fd, &byte, 1) > 0) {
                 switch (state) {
                     case START:
-                        state = (byte == FLAG) ? FLAG_RCV : START;
+                        state = (byte == FLAG) ? FLAG_RECEIVED : START;
                         break;
-                    case FLAG_RCV:
-                        state = (byte == Awrite) ? A_RCV : (byte == FLAG ? FLAG_RCV : START);
+                    case FLAG_RECEIVED:
+                        state = (byte == Awrite) ? A_RECEIVED : (byte == FLAG ? FLAG_RECEIVED : START);
                         break;
-                    case A_RCV:
-                        state = (byte == DISC) ? C_RCV : START;
+                    case A_RECEIVED:
+                        state = (byte == DISC) ? C_RECEIVED : START;
                         break;
-                    case C_RCV:
+                    case C_RECEIVED:
                         state = (byte == BCC1_DISC) ? BCC1_OK : START;
                         break;
                     case BCC1_OK:

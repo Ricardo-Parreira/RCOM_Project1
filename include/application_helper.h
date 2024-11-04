@@ -6,14 +6,8 @@
 #include <string.h>
 #include "link_layer.h"
 
-int initializeConnection(LinkLayer *linkLayer, const char *serialPort, const char *role, int baudRate, int nTries, int timeout);
-void handleTransmitter(const char *filename);
-void handleReceiver(const char *filename);
-unsigned char* readFileData(const char *filename, int *fileSize);
-void sendDataPackets(unsigned char *data, int fileSize);
-void receiveDataPackets(FILE *file);
-unsigned char* build_control_packet(int type, int fileSize, const char *filename, int *packetSize);
-unsigned char* read_control_packet(int packetSize,int* fileSize);
-unsigned char * build_data_packet(unsigned char sequence, unsigned char *data_field, int dataFieldSize);
+unsigned char * parseControl(const unsigned int c, const char* filename, long int length, unsigned int* size);
+unsigned char * openFile(FILE* fd, long int fileLength);
+void removeHeaderData(const unsigned char* packet, const unsigned int packetSize, unsigned char* buffer);
 
 #endif // APPLICATION_HELPER_H

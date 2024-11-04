@@ -27,7 +27,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     if (linkLayer.role == LlTx) {
         printf("Testing llwrite...\n");
 
-        const char *data = "~ Hello~";
+        const char *data = "~Hello~";
         int bytesWritten = llwrite((unsigned char*)data, strlen(data));
 
         if (bytesWritten < 0) {
@@ -43,17 +43,18 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     if (linkLayer.role == LlRx) {
         printf("Testing llread...\n");
 
-        unsigned char packet[MAX_FRAME_SIZE];  // Buffer for the received data
+        unsigned char packet[MAX_FRAME_SIZE+6];  // Buffer for the received data
         int bytesRead = llread(packet);
 
         if (bytesRead < 0) {
             perror("llread failed");
         } else {
             printf("llread success: %d bytes read\n", bytesRead);
-            printf("Received data: %s\n", packet+3);  // Assuming it's a string, for simplicity
+            printf("Received data: %s\n", packet);  // Assuming it's a string, for simplicity
+            printf("[DEBUG] bytesRead: %d \n", bytesRead);
             for (int i = 0; i < bytesRead; i++) {
-    printf("%02X ", packet[i]);  // Print as hex
-}
+                printf("%02X ", packet[i]);  // Print as hex
+            }
 printf("\n");
         }
     }

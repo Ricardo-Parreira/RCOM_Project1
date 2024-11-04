@@ -238,23 +238,36 @@ int byteDeStuffing(const unsigned char *stuffedData, int stuffedSize, unsigned c
 
 int llwrite(const unsigned char *buf, int bufSize)
 {
-    unsigned char frame[MAX_FRAME_SIZE];
+    unsigned char frame[MAX_FRAME_SIZE*2+6];
     //int fd = openSerialPort(connectionParameters.serialPort,connectionParameters.baudRate);
     //if (fd < 0) return -1;
     int frameSize = bufSize + 6;
     //unsigned char *frame = (unsigned char*) malloc(frameSize);
     frame[0] = FLAG;
     frame[1] = Awrite;
-    frame[2] = bitTx << 7; //nao sei se é 6 ou 7 | later bitTx = (bitTx++)%2
+    frame[2] = C_I(bitTx);
     frame[3] = frame[1] ^ frame[2];
 
 
     signal(SIGALRM, alarmHandler);
 
-    
-    //Passa todos os bytes do buf para o frame (a partir do byte 4) 
-    for (int i = 0; i < bufSize; i++){
-        frame[i+4] = buf[i];
+
+
+    //STUFFING (swapping 0x7E for 0x7D 0x5E and 0x7D for 0x7D 0x5D)
+    int index = 4;
+    for (int i = 0; i < bufSize; i++) {
+        if (buf[i] == 0x7E) {
+            frame[index] = 0x7D;
+            frame[index + 1] = 0x5E;
+            index += 2;
+        } else if (buf[i] == 0x7D) {
+            frame[index] = 0x7D;
+            frame[index + 1] = 0x5D;
+            index += 2;
+        } else {
+            frame[index] = buf[i];
+            index++;
+        }
     }
 
     //calcula o bcc2
@@ -263,13 +276,18 @@ int llwrite(const unsigned char *buf, int bufSize)
         bcc2 = bcc2 ^ buf[i];
     }
 
-    //STUFFING (swapping 0x7E for 0x7D 0x5E and 0x7D for 0x7D 0x5D)
-    unsigned char stuffedFrame[MAX_PAYLOAD_SIZE*2 + 6];
-    int stuffedFrameSize = byteStuffing(frame+1, frameSize-2, stuffedFrame);
 
-    memcpy(frame + 4, stuffedFrame, stuffedFrameSize);
-    frame[stuffedFrameSize+4] = bcc2;
-    frame[stuffedFrameSize+5] = FLAG;
+    printf("index: %d\n", index);
+    frame[index++] = bcc2;
+    printf("bcc2: %d \n", bcc2);
+    frame[index++] = FLAG;
+    int stuffedFrameSize = index;
+
+    printf("[DEBUG] frame \n");
+    for (int i = 0; i < stuffedFrameSize; i++) {
+        
+        printf("%02X ", frame[i]);
+    }
 
     int aceite = 0;
     int rejeitado = 0;
@@ -282,7 +300,7 @@ int llwrite(const unsigned char *buf, int bufSize)
         rejeitado = 0;
 
         while (!alarmEnabled && !rejeitado && !aceite) {
-            write(fd, frame, stuffedFrameSize + 6);
+            write(fd, frame, stuffedFrameSize);
             unsigned char check = readAckFrame(fd);
             printf("check: %d\n", check);
             if (check == 0x54 || check == 0x55) {
@@ -294,7 +312,7 @@ int llwrite(const unsigned char *buf, int bufSize)
                 continue;
             }
         }
-        if (aceite) break;
+        if (aceite || rejeitado) break;
         transmission++;
     }
 
@@ -368,6 +386,11 @@ int llread(unsigned char *packet)
 
     // Desfazer byte stuffing
     int deStuffedSize = byteDeStuffing(frame, dataIndex, packet);
+
+    printf("[DEBUG] De-stuffed data: \n");
+    for(int i = 0; i < deStuffedSize; i++){
+        printf("packet[%d]: %02X\n", i, packet[i]);
+    }
 
     if (deStuffedSize < 0) {
         // Handle error in de-stuffing

@@ -18,6 +18,7 @@ typedef enum
     A_RECEIVED,
     C_RECEIVED,
     BCC1_OK,
+    ESC_RECEIVED,
     DATA,
     STOP
 } LinkLayerState;

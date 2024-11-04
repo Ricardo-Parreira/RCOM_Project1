@@ -320,18 +320,7 @@ int llwrite(const unsigned char *buf, int bufSize)
 
     if (aceite) return frameSize;
     
-    printf("Sending frame: ");
-    for (int i = 0; i < bufSize; i++) {
-        printf("%02X ", frame[i]);
-    }
-    printf("\n");
-
-    int bytesWritten = write(fd, frame, bufSize);
-    if (bytesWritten < 0) {
-        perror("Write error");
-        return -1;
-    }
-    return bytesWritten;  // Return number of bytes written
+    return -1;
 }
 
 ////////////////////////////////////////////////
@@ -357,35 +346,49 @@ int llread(unsigned char *packet)
                 else if (byte != FLAG) state = START;
                 break;
             case A_RECEIVED:
-                if ((byte == 0x00) || (byte == 0x40)) {
+                if (byte == C_I(bitTx)) {
                     state = C_RECEIVED;
                 } else if (byte == FLAG) state = FLAG_RECEIVED;
                 else state = START;
                 break;
             case C_RECEIVED:
-                if (byte == (Awrite ^ 0x00) || byte == (Awrite ^ 0x40)) {
-                    state = BCC1_OK;
+                if (byte == (Awrite ^ C_I(bitTx))) {
+                    state = DATA;
                 } else if (byte == FLAG) state = FLAG_RECEIVED;
                 else state = START;
                 break;
-            case BCC1_OK:
+            case DATA:
                 if (byte == FLAG) {
                     state = STOP;
                 } else {
-                    frame[dataIndex++] = byte;
+                    if(byte==0x7D){
+                        state = ESC_RECEIVED;
+                    }
+                    else{
+                        packet[dataIndex++] = byte;
+                    }
                 }
                 break;
-            case READ:
-            case DATA:
+            case ESC_RECEIVED:
+                if(byte == 0x5E){
+                    packet[dataIndex++] = 0x7E;
+                }
+                else if(byte == 0x5D){
+                    packet[dataIndex++] = 0x7D;
+                }
+                else{
+                    packet[dataIndex++] = byte;
+                }
+                state = DATA;
+                break;
             case STOP:
                 
                 break;
             }
         }
-    }
+    }   
 
-    // Desfazer byte stuffing
-    int deStuffedSize = byteDeStuffing(frame, dataIndex, packet);
+    int deStuffedSize = dataIndex;
 
     printf("[DEBUG] De-stuffed data: \n");
     for(int i = 0; i < deStuffedSize; i++){

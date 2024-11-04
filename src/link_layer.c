@@ -69,106 +69,101 @@ int llopen(LinkLayer connectionParameters)
 ////////////////////////////////////////////////
 // LLWRITE
 ////////////////////////////////////////////////
-int llwrite(int fd, const unsigned char *buf, int bufSize)
-{
-    unsigned char *information_frame = (unsigned char *) malloc(bufSize + 6);
+int llwrite(int fd, const unsigned char *buf, int bufSize) {
+    int current_size = bufSize + 6;
+    unsigned char *information_frame = (unsigned char *) malloc(current_size);
+    if (!information_frame) {
+        perror("Failed to allocate memory");
+        return -1;
+    }
+
+    // Set up initial bytes in the information frame
     information_frame[0] = FLAG;
-    
     information_frame[1] = A_ER;
     information_frame[2] = C_N(frameNumberTransmiter);
-    information_frame[3] = (information_frame[1] ^ information_frame[2]);
-    memcpy(information_frame+4,buf, bufSize);
+    information_frame[3] = information_frame[1] ^ information_frame[2];
+    
+    // Calculate BCC2
     unsigned char BCC2 = buf[0];
-
-    for (unsigned int i = 1 ; i < bufSize ; i++){
+    for (int i = 1; i < bufSize; i++) {
         BCC2 ^= buf[i];
     }
 
- 
-    int current_size = bufSize + 6;
+    // Copy data and perform byte stuffing
     int current_index = 4;
-
-    // stuffing
-    for (unsigned int i = 0 ; i<bufSize ; i++){
-        if (buf[i] == FLAG || buf[i] == ESC){
-            information_frame = realloc(information_frame,++current_size);
+    for (int i = 0; i < bufSize; i++) {
+        if (buf[i] == FLAG || buf[i] == ESC) {
+            information_frame = realloc(information_frame, ++current_size);
             information_frame[current_index++] = ESC;
-            information_frame[current_index++] = (buf[i] ^ 0x20);
-        }
-        else{
+            information_frame[current_index++] = buf[i] ^ 0x20;
+        } else {
             information_frame[current_index++] = buf[i];
         }
-        
- 
-
     }
-   if (  BCC2==FLAG || BCC2==ESC ){
-        information_frame = realloc(information_frame,++current_size);
+
+    // Byte-stuff BCC2 if necessary
+    if (BCC2 == FLAG || BCC2 == ESC) {
+        information_frame = realloc(information_frame, ++current_size);
         information_frame[current_index++] = ESC;
-        information_frame[current_index++] = (BCC2 ^ 0x20);
-        }
+        information_frame[current_index++] = BCC2 ^ 0x20;
+    } else {
+        information_frame[current_index++] = BCC2;
+    }
 
-    else information_frame[current_index++] = BCC2;
-
+    // Add final FLAG byte
     information_frame[current_index++] = FLAG;
+
+    // Initialize variables for transmission and state machine
     alarmCount = 0;
-    int accepted = 0;
-    int rejected = 0;
+    int accepted = 0, rejected = 0;
     unsigned char byte = '\0';
     LinkLayerStateMachine current_state = START;
 
-
-    while(alarmCount < nRetransmissions){
+    while (alarmCount < nRetransmissions) {
+        // Enable alarm for timeout and reset state
         alarmEnabled = TRUE;
         alarm(timeout);
-        accepted = 0; 
-        rejected =  0;
+        accepted = 0;
+        rejected = 0;
 
-       
-        while (alarmEnabled == TRUE && accepted == 0 && rejected ==0 ){
+        // Send frame and handle response
+        int written_bytes = write(fd, information_frame, current_index);
+        if (written_bytes < 0) {
+            perror("Failed to write data");
+            return -1;
+        }
+        sendedBits += bufSize * 8;
+
+        // Process response using state machine
+        while (alarmEnabled && !accepted && !rejected) {
+            unsigned char response = control_frame_state_machine(fd, byte, current_state);
             
-            int written_bytes = write(fd, information_frame, current_index);
-            sendedBits += bufSize * 8;
-
-            
-
-            if (written_bytes < 0){
-                exit(-1);
+            if (response == C_RR(0) || response == C_RR(1)) {
+                accepted = 1;
+                frameNumberTransmiter = (frameNumberTransmiter + 1) % 2;
+                alarm(0);
+                totalBits += bufSize * 8;
+            } else if (response == C_REJ(0) || response == C_REJ(1)) {
+                rejected = 1;
+                dataErrors++;
             }
-         
-            unsigned char answer = control_frame_state_machine(fd, byte,current_state);
+        }
 
-                
-                if (answer == C_RR(0) || answer == C_RR(1)){
-             
-                    accepted = 1;
-                    frameNumberTransmiter += 1;
-                    frameNumberTransmiter %= 2;
-                    alarmCount = nRetransmissions;
-                    alarm(0);
-                    totalBits += bufSize * 8;
-                }
+        if (accepted) {
+            alarmCount = nRetransmissions;
+        } else if (rejected) {
+            alarmCount++;
+        }
+    }
 
-                else if (answer == C_REJ(0) || answer == C_REJ(1)){
-                    rejected = 1;
-                    dataErrors++;
-                }
-
-         }
-
-   }
-    
-    
-
-    free(information_frame);
-    if (accepted) return current_index;
-    else {
+    if (accepted) {
+        return current_index;
+    } else {
         llclose(fd);
         return -1;
     }
-    
-   return 1;
 }
+
 
 ////////////////////////////////////////////////
 // LLREAD

@@ -194,58 +194,59 @@ int llwrite(const unsigned char *buf, int bufSize)
         while (!alarmEnabled && !rejeitado && !aceite) {
             write(fd, frame, stuffedFrameSize);
             unsigned char byte, cByte = 0;
-    LinkLayerState state = START;
-    
-    while (state != STOP && alarmEnabled == FALSE) {  
-        if (read(fd, &byte, 1) > 0) {
-            printf("byte: %02X \n", byte);
-            switch (state) {
-                case START:
-                    if (byte == FLAG) state = FLAG_RECEIVED;
-                    break;
+            LinkLayerState state = START;
 
-                case FLAG_RECEIVED:
-                    if (byte == Aread) state = A_RECEIVED;
-                    else if (byte != FLAG) state = START;
-                    break;
+                //máquina de estados para checkar a resposta
+                while (state != STOP && alarmEnabled == FALSE) {  
+                    if (read(fd, &byte, 1) > 0) {
+                        printf("byte: %02X \n", byte);
+                        switch (state) {
+                            case START:
+                                if (byte == FLAG) state = FLAG_RECEIVED;
+                                break;
 
-                case A_RECEIVED:
-                    if ((byte == C_RR(bitTx)) | (byte == C_REJ(bitTx))) {
-                        state = C_RECEIVED;
-                        
-                        cByte = byte; // Store the control byte
-                    } else if (byte == FLAG) {
-                        state = FLAG_RECEIVED;
-                    } else {
-                        state = START;
+                            case FLAG_RECEIVED:
+                                if (byte == Aread) state = A_RECEIVED;
+                                else if (byte != FLAG) state = START;
+                                break;
+
+                            case A_RECEIVED:
+                                if ((byte == C_RR(bitTx)) | (byte == C_REJ(bitTx))) {
+                                    state = C_RECEIVED;
+                                    
+                                    cByte = byte; // Store the control byte
+                                } else if (byte == FLAG) {
+                                    state = FLAG_RECEIVED;
+                                } else {
+                                    state = START;
+                                }
+                                break;
+
+                            case C_RECEIVED:
+                                
+                                if (byte == (Aread ^ cByte)) {
+                                    state = BCC1;
+                                } else if (byte == FLAG) {
+                                    state = FLAG_RECEIVED;
+                                } else {
+                                    state = START;
+                                }
+                                break;
+
+                            case BCC1:
+                            printf("a puta passou \n");
+                                if (byte == FLAG) {
+                                    state = STOP;
+                                } else {
+                                    state = START;
+                                }
+                                break;
+
+                            default:
+                                break;
+                        }
                     }
-                    break;
-
-                case C_RECEIVED:
-                    
-                    if (byte == (Aread ^ cByte)) {
-                        state = BCC1;
-                    } else if (byte == FLAG) {
-                        state = FLAG_RECEIVED;
-                    } else {
-                        state = START;
-                    }
-                    break;
-
-                case BCC1:
-                printf("a puta passou \n");
-                    if (byte == FLAG) {
-                        state = STOP;
-                    } else {
-                        state = START;
-                    }
-                    break;
-
-                default:
-                    break;
-            }
-        }
-    }
+                }
     printf("byte passado: %02X \n", cByte);
             if (cByte == C_REJ(bitTx)) {
                 rejeitado = 1;
@@ -260,7 +261,7 @@ int llwrite(const unsigned char *buf, int bufSize)
         transmission++;
     }
 
-    //free(frame); cant uncomment tis or it fails
+    //free(frame); cant uncomment this or it fails
 
     if (aceite) return frameSize;
     if (rejeitado) printf("[ERROR] Frame rejected, BCC2 mismatch\n");

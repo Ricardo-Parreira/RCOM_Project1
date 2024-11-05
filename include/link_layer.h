@@ -80,6 +80,7 @@ typedef struct
 // Return "1" on success or "-1" on error.
 int llopen(LinkLayer connectionParameters);
 void setConnectionParameters(LinkLayer connectionParameters);
+int reconnectSerialPort(const char* serialPort, int baudRate);
 
 
 // Send data in buf with size bufSize.

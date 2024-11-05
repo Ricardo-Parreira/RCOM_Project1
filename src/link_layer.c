@@ -130,111 +130,9 @@ int llopen(LinkLayer connectionParameters){
     return -1;
 }
 
-// -------- AUXILIARY TO LLWRITE 
-int byteStuffing(const unsigned char *frame, int frameSize, unsigned char *stuffedData){
-    int j = 0;
-    for (int i = 0; i < frameSize; i++) {
-        if (frame[i] == FLAG) {
-            stuffedData[j] = ESCAPE_BYTE;
-            j++;
-            stuffedData[j] = 0x5E;
-            j++;
-        } 
-        else if (frame[i] == ESCAPE_BYTE) {
-            stuffedData[j] = ESCAPE_BYTE;
-            j++;
-            stuffedData[j] = 0x5D;
-            j++;
-        } 
-        else {
-            stuffedData[j] = frame[i];
-            j++;
-        }
-    }
-    return j;
-}
-
-//máquina de estados para ler o acknoldege frame    
-unsigned char readAckFrame(int fd){
-
-    unsigned char byte, cByte = 0;
-    LinkLayerState state = START;
-    
-    while (state != STOP && alarmEnabled == FALSE) {  
-        if (read(fd, &byte, 1) > 0) {
-            printf("byte: %02X \n", byte);
-            switch (state) {
-                case START:
-                    if (byte == FLAG) state = FLAG_RECEIVED;
-                    break;
-
-                case FLAG_RECEIVED:
-                    if (byte == Aread) state = A_RECEIVED;
-                    else if (byte != FLAG) state = START;
-                    break;
-
-                case A_RECEIVED:
-                    if ((byte == C_RR(bitTx)) | (byte == C_REJ(bitTx))) {
-                        state = C_RECEIVED;
-                        
-                        cByte = byte; // Store the control byte
-                    } else if (byte == FLAG) {
-                        state = FLAG_RECEIVED;
-                    } else {
-                        state = START;
-                    }
-                    break;
-
-                case C_RECEIVED:
-                    
-                    if (byte == (Aread ^ cByte)) {
-                        state = BCC1;
-                    } else if (byte == FLAG) {
-                        state = FLAG_RECEIVED;
-                    } else {
-                        state = START;
-                    }
-                    break;
-
-                case BCC1:
-                printf("a puta passou \n");
-                    if (byte == FLAG) {
-                        state = STOP;
-                    } else {
-                        state = START;
-                    }
-                    break;
-
-                default:
-                    break;
-            }
-        }
-    }
-    printf("byte passado: %02X \n", cByte);
-    return (state == STOP) ? cByte : 0;
-}
-
-// Helper function to perform byte de-stuffing
-int byteDeStuffing(const unsigned char *stuffedData, int stuffedSize, unsigned char *dest) {
-    int j = 0; // Index for dest (de-stuffed data)
-    for (int i = 0; i < stuffedSize; i++) {
-        if (stuffedData[i] == ESCAPE_BYTE) { // Check for escape byte
-            i++; // Move to the next byte after 0x7D
-            if (stuffedData[i] == 0x5E) {
-                dest[j] = FLAG; // Replace 0x7D 0x5E with 0x7E
-            } 
-            else if (stuffedData[i] == 0x5D) {
-                dest[j] = ESCAPE_BYTE; // Replace 0x7D 0x5D with 0x7D
-            }
-        } 
-        else {
-            dest[j] = stuffedData[i]; // Copy normal byte
-        }
-        j++;
-    }
-    return j; // Return the size of de-stuffed data
-}
-
+////////////////////////////////////////////////
+// LLWRITE
+////////////////////////////////////////////////
 
 int llwrite(const unsigned char *buf, int bufSize)
 {
@@ -295,11 +193,63 @@ int llwrite(const unsigned char *buf, int bufSize)
 
         while (!alarmEnabled && !rejeitado && !aceite) {
             write(fd, frame, stuffedFrameSize);
-            unsigned char check = readAckFrame(fd);
-            printf("check: %d\n", check);
-            if (check == C_REJ(bitTx)) {
+            unsigned char byte, cByte = 0;
+    LinkLayerState state = START;
+    
+    while (state != STOP && alarmEnabled == FALSE) {  
+        if (read(fd, &byte, 1) > 0) {
+            printf("byte: %02X \n", byte);
+            switch (state) {
+                case START:
+                    if (byte == FLAG) state = FLAG_RECEIVED;
+                    break;
+
+                case FLAG_RECEIVED:
+                    if (byte == Aread) state = A_RECEIVED;
+                    else if (byte != FLAG) state = START;
+                    break;
+
+                case A_RECEIVED:
+                    if ((byte == C_RR(bitTx)) | (byte == C_REJ(bitTx))) {
+                        state = C_RECEIVED;
+                        
+                        cByte = byte; // Store the control byte
+                    } else if (byte == FLAG) {
+                        state = FLAG_RECEIVED;
+                    } else {
+                        state = START;
+                    }
+                    break;
+
+                case C_RECEIVED:
+                    
+                    if (byte == (Aread ^ cByte)) {
+                        state = BCC1;
+                    } else if (byte == FLAG) {
+                        state = FLAG_RECEIVED;
+                    } else {
+                        state = START;
+                    }
+                    break;
+
+                case BCC1:
+                printf("a puta passou \n");
+                    if (byte == FLAG) {
+                        state = STOP;
+                    } else {
+                        state = START;
+                    }
+                    break;
+
+                default:
+                    break;
+            }
+        }
+    }
+    printf("byte passado: %02X \n", cByte);
+            if (cByte == C_REJ(bitTx)) {
                 rejeitado = 1;
-            } else if (check == C_RR(bitTx)) {
+            } else if (cByte == C_RR(bitTx)) {
                 aceite = 1;
                 bitTx = (bitTx + 1) % 2;
             } else {

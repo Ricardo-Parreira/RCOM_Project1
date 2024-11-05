@@ -27,13 +27,6 @@
 void applicationLayer(const char *serialPort, const char *role, int baudRate,
                       int nTries, int timeout, const char *filename);
 
-unsigned char *buildControlPacket(int control_field, int fileSize, const char* fileName, int *controlpacketSize);
-
-unsigned char *readControlPacket(unsigned char *controlpacket, int packetSize, int *fileSize);
-
-unsigned char *buildDataPacket(unsigned char sequence, unsigned char *data_field, int dataFieldSize);
-
-
 
 
 #endif // _APPLICATION_LAYER_H_

@@ -69,6 +69,7 @@ typedef struct
 
 #define MAX_FRAME_SIZE 512
 
+
 //destuffing
 #define ESCAPE_BYTE 0x7D
 #define STUFFING_MASK 0x20
@@ -78,6 +79,8 @@ typedef struct
 // Open a connection using the "port" parameters defined in struct linkLayer.
 // Return "1" on success or "-1" on error.
 int llopen(LinkLayer connectionParameters);
+void setConnectionParameters(LinkLayer connectionParameters);
+
 
 // Send data in buf with size bufSize.
 // Return number of chars written, or "-1" on error.
@@ -91,10 +94,5 @@ int llread(unsigned char *packet);
 // if showStatistics == TRUE, link layer should print statistics in the console on close.
 // Return "1" on success or "-1" on error.
 int llclose(int showStatistics);
-
-// Additional helper functions
-int byteStuffing(const unsigned char *frame, int frameSize, unsigned char *stuffedData);
-int byteDeStuffing(const unsigned char *stuffedData, int stuffedSize, unsigned char *dest);
-unsigned char readAckFrame(int fd);
 
 #endif // _LINK_LAYER_H_

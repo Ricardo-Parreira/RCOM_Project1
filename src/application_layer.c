@@ -27,7 +27,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     if (linkLayer.role == LlTx) {
         printf("Testing llwrite...\n");
 
-        const char *data = "Hello";
+        const char *data = "{~Hello~}";
         int bytesWritten = llwrite((unsigned char*)data, strlen(data));
 
         if (bytesWritten < 0) {

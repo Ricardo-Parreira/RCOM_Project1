@@ -256,7 +256,7 @@ int llwrite(const unsigned char *buf, int bufSize)
     //STUFFING (swapping 0x7E for 0x7D 0x5E and 0x7D for 0x7D 0x5D)
     int index = 4;
     for (int i = 0; i < bufSize; i++) {
-        if (buf[i] == FLAG) {
+        if (buf[i] == FLAG || buf[i] == ESCAPE_BYTE) {
             frame[index++] = ESCAPE_BYTE;
             frame[index++] = buf[i] ^ STUFFING_MASK;
         } else {
@@ -306,13 +306,14 @@ int llwrite(const unsigned char *buf, int bufSize)
                 continue;
             }
         }
-        if (aceite || rejeitado) break;
+        if (aceite) break;
         transmission++;
     }
 
-    //free(frame);
+    //free(frame); cant uncomment tis or it fails
 
     if (aceite) return frameSize;
+    if (rejeitado) printf("[ERROR] Frame rejected, BCC2 mismatch\n");
     
     return -1;
 }
@@ -323,6 +324,7 @@ int llwrite(const unsigned char *buf, int bufSize)
 int llread(unsigned char *packet)
 {
 
+    unsigned char packet_copy[MAX_FRAME_SIZE+6];
     LinkLayerState state = START;
     unsigned char byte;
     int dataIndex = 0;
@@ -359,19 +361,19 @@ int llread(unsigned char *packet)
                         state = ESC_RECEIVED;
                     }
                     else{
-                        packet[dataIndex++] = byte;
+                        packet_copy[dataIndex++] = byte;
                     }
                 }
                 break;
             case ESC_RECEIVED:
                 if(byte == 0x5E){
-                    packet[dataIndex++] = FLAG;
+                    packet_copy[dataIndex++] = FLAG;
                 }
                 else if(byte == 0x5D){
-                    packet[dataIndex++] = ESCAPE_BYTE;
+                    packet_copy[dataIndex++] = ESCAPE_BYTE;
                 }
                 else{
-                    packet[dataIndex++] = byte;
+                    packet_copy[dataIndex++] = byte;
                 }
                 state = DATA;
                 break;
@@ -388,7 +390,7 @@ int llread(unsigned char *packet)
 
     printf("[DEBUG] De-stuffed data: \n");
     for(int i = 0; i < deStuffedSize; i++){
-        printf("packet[%d]: %02X\n", i, packet[i]);
+        printf("packet_copy[%d]: %02X\n", i, packet_copy[i]);
     }
 
     if (deStuffedSize < 0) {
@@ -398,13 +400,22 @@ int llread(unsigned char *packet)
         return -1;
     }
 
+    //put the data in the packet excluding the bcc2
+    for (int i = 0; i < deStuffedSize - 1; i++) {
+        packet[i] = packet_copy[i];
+    }
+
+    for(int i = 0; i < deStuffedSize -1; i++){
+        printf("packet[%d]: %02X\n", i, packet[i]);
+    }
+
     // Calculate BCC2 for the de-stuffed data
     unsigned char calculatedBCC2 = 0;
     for (int i = 0; i < deStuffedSize - 1; i++) {
         calculatedBCC2 ^= packet[i];
     }
 
-    if (calculatedBCC2 != packet[deStuffedSize - 1]) {
+    if (calculatedBCC2 != packet_copy[deStuffedSize - 1]) {
         // Send REJ if BCC2 does not match
         unsigned char rej[5] = {FLAG, Aread, C_REJ(bitTx), Aread ^ C_REJ(bitTx), FLAG};
         write(fd, rej, 5);
@@ -414,6 +425,8 @@ int llread(unsigned char *packet)
         unsigned char rr[5] = {FLAG, Aread, C_RR(bitTx), Aread ^ C_RR(bitTx), FLAG};
         write(fd, rr, 5);
     }
+
+    
 
     // Return the size of the de-stuffed data excluding the BCC2 byte
     return deStuffedSize - 1;

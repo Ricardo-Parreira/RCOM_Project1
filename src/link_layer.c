@@ -72,7 +72,7 @@ int llopen(LinkLayer connectionParameters){
             alarm(timeout);
             alarmEnabled = 0;
 
-            while (!alarmEnabled && state != READ) {
+            while (!alarmEnabled && state != STOP) {
                 if (read(fd, &byte, 1) > 0) {
                     switch (state) {
                         case START:
@@ -85,22 +85,22 @@ int llopen(LinkLayer connectionParameters){
                             state = (byte == CUA) ? C_RECEIVED : (byte == FLAG ? FLAG_RECEIVED : START);
                             break;
                         case C_RECEIVED:
-                            state = (byte == BCC1r) ? BCC1_OK : START;
+                            state = (byte == BCC1r) ? BCC1 : START;
                             break;
-                        case BCC1_OK:
-                            state = (byte == FLAG) ? READ : START;
+                        case BCC1:
+                            state = (byte == FLAG) ? STOP : START;
                             break;
                         default:
                             break;
                     }
                 }
             }
-            if (state == READ) return fd;
+            if (state == STOP) return fd;
             retransmissions--;
         }
         return -1;  // Failed to connect as transmitter
     } else if (role == LlRx) {
-        while (state != READ) {
+        while (state != STOP) {
             if (read(fd, &byte, 1) > 0) {
                 switch (state) {
                     case START:
@@ -113,10 +113,10 @@ int llopen(LinkLayer connectionParameters){
                         state = (byte == CSet) ? C_RECEIVED : (byte == FLAG ? FLAG_RECEIVED : START);
                         break;
                     case C_RECEIVED:
-                        state = (byte == BCC1w) ? BCC1_OK : START;
+                        state = (byte == BCC1w) ? BCC1 : START;
                         break;
-                    case BCC1_OK:
-                        state = (byte == FLAG) ? READ : START;
+                    case BCC1:
+                        state = (byte == FLAG) ? STOP : START;
                         break;
                     default:
                         break;
@@ -134,14 +134,14 @@ int llopen(LinkLayer connectionParameters){
 int byteStuffing(const unsigned char *frame, int frameSize, unsigned char *stuffedData){
     int j = 0;
     for (int i = 0; i < frameSize; i++) {
-        if (frame[i] == 0x7E) {
-            stuffedData[j] = 0x7D;
+        if (frame[i] == FLAG) {
+            stuffedData[j] = ESCAPE_BYTE;
             j++;
             stuffedData[j] = 0x5E;
             j++;
         } 
-        else if (frame[i] == 0x7D) {
-            stuffedData[j] = 0x7D;
+        else if (frame[i] == ESCAPE_BYTE) {
+            stuffedData[j] = ESCAPE_BYTE;
             j++;
             stuffedData[j] = 0x5D;
             j++;
@@ -160,7 +160,7 @@ unsigned char readAckFrame(int fd){
     unsigned char byte, cByte = 0;
     LinkLayerState state = START;
     
-    while (state != READ && alarmEnabled == FALSE) {  
+    while (state != STOP && alarmEnabled == FALSE) {  
         if (read(fd, &byte, 1) > 0) {
             printf("byte: %02X \n", byte);
             switch (state) {
@@ -188,7 +188,7 @@ unsigned char readAckFrame(int fd){
                 case C_RECEIVED:
                     
                     if (byte == (Aread ^ cByte)) {
-                        state = BCC1_OK;
+                        state = BCC1;
                     } else if (byte == FLAG) {
                         state = FLAG_RECEIVED;
                     } else {
@@ -196,10 +196,10 @@ unsigned char readAckFrame(int fd){
                     }
                     break;
 
-                case BCC1_OK:
+                case BCC1:
                 printf("a puta passou \n");
                     if (byte == FLAG) {
-                        state = READ;
+                        state = STOP;
                     } else {
                         state = START;
                     }
@@ -211,20 +211,20 @@ unsigned char readAckFrame(int fd){
         }
     }
     printf("byte passado: %02X \n", cByte);
-    return (state == READ) ? cByte : 0;
+    return (state == STOP) ? cByte : 0;
 }
 
 // Helper function to perform byte de-stuffing
 int byteDeStuffing(const unsigned char *stuffedData, int stuffedSize, unsigned char *dest) {
     int j = 0; // Index for dest (de-stuffed data)
     for (int i = 0; i < stuffedSize; i++) {
-        if (stuffedData[i] == 0x7D) { // Check for escape byte
+        if (stuffedData[i] == ESCAPE_BYTE) { // Check for escape byte
             i++; // Move to the next byte after 0x7D
             if (stuffedData[i] == 0x5E) {
-                dest[j] = 0x7E; // Replace 0x7D 0x5E with 0x7E
+                dest[j] = FLAG; // Replace 0x7D 0x5E with 0x7E
             } 
             else if (stuffedData[i] == 0x5D) {
-                dest[j] = 0x7D; // Replace 0x7D 0x5D with 0x7D
+                dest[j] = ESCAPE_BYTE; // Replace 0x7D 0x5D with 0x7D
             }
         } 
         else {
@@ -256,17 +256,11 @@ int llwrite(const unsigned char *buf, int bufSize)
     //STUFFING (swapping 0x7E for 0x7D 0x5E and 0x7D for 0x7D 0x5D)
     int index = 4;
     for (int i = 0; i < bufSize; i++) {
-        if (buf[i] == 0x7E) {
-            frame[index] = 0x7D;
-            frame[index + 1] = 0x5E;
-            index += 2;
-        } else if (buf[i] == 0x7D) {
-            frame[index] = 0x7D;
-            frame[index + 1] = 0x5D;
-            index += 2;
+        if (buf[i] == FLAG) {
+            frame[index++] = ESCAPE_BYTE;
+            frame[index++] = buf[i] ^ STUFFING_MASK;
         } else {
-            frame[index] = buf[i];
-            index++;
+            frame[index++] = buf[i];
         }
     }
 
@@ -303,9 +297,9 @@ int llwrite(const unsigned char *buf, int bufSize)
             write(fd, frame, stuffedFrameSize);
             unsigned char check = readAckFrame(fd);
             printf("check: %d\n", check);
-            if (check == 0x54 || check == 0x55) {
+            if (check == C_REJ(bitTx)) {
                 rejeitado = 1;
-            } else if (check == 0xAA || check == 0xAB) {
+            } else if (check == C_RR(bitTx)) {
                 aceite = 1;
                 bitTx = (bitTx + 1) % 2;
             } else {
@@ -328,7 +322,7 @@ int llwrite(const unsigned char *buf, int bufSize)
 ////////////////////////////////////////////////
 int llread(unsigned char *packet)
 {
-    unsigned char frame[MAX_FRAME_SIZE];
+
     LinkLayerState state = START;
     unsigned char byte;
     int dataIndex = 0;
@@ -361,7 +355,7 @@ int llread(unsigned char *packet)
                 if (byte == FLAG) {
                     state = STOP;
                 } else {
-                    if(byte==0x7D){
+                    if(byte==ESCAPE_BYTE){
                         state = ESC_RECEIVED;
                     }
                     else{
@@ -371,10 +365,10 @@ int llread(unsigned char *packet)
                 break;
             case ESC_RECEIVED:
                 if(byte == 0x5E){
-                    packet[dataIndex++] = 0x7E;
+                    packet[dataIndex++] = FLAG;
                 }
                 else if(byte == 0x5D){
-                    packet[dataIndex++] = 0x7D;
+                    packet[dataIndex++] = ESCAPE_BYTE;
                 }
                 else{
                     packet[dataIndex++] = byte;
@@ -383,6 +377,8 @@ int llread(unsigned char *packet)
                 break;
             case STOP:
                 
+                break;  
+            case BCC1:
                 break;
             }
         }
@@ -442,7 +438,7 @@ int llclose(int showStatistics) {
             alarmEnabled = 0;
 
             // waiting for UA from Rx
-            while (!alarmEnabled && state != READ) {
+            while (!alarmEnabled && state != STOP) {
                 if (read(fd, &byte, 1) > 0) {
                     switch (state) {
                         case START:
@@ -455,17 +451,17 @@ int llclose(int showStatistics) {
                             state = (byte == CUA) ? C_RECEIVED : START;
                             break;
                         case C_RECEIVED:
-                            state = (byte == BCC1r) ? BCC1_OK : START;
+                            state = (byte == BCC1r) ? BCC1 : START;
                             break;
-                        case BCC1_OK:
-                            state = (byte == FLAG) ? READ : START;
+                        case BCC1:
+                            state = (byte == FLAG) ? STOP : START;
                             break;
                         default:
                             break;
                     }
                 }
             }
-            if (state == READ) {
+            if (state == STOP) {
                 close(fd);
                 if (showStatistics) {
                     printf("Connection closed successfully. Statistics: Retransmissions: %d, Alarms: %d\n", retransmissions, alarmCount);
@@ -477,7 +473,7 @@ int llclose(int showStatistics) {
         return -1;  // fail to close
     } else if (role == LlRx) {  // Receiver (Rx)
         // wait to receive frame DISC do Tx
-        while (state != READ) {
+        while (state != STOP) {
             if (read(fd, &byte, 1) > 0) {
                 switch (state) {
                     case START:
@@ -490,10 +486,10 @@ int llclose(int showStatistics) {
                         state = (byte == DISC) ? C_RECEIVED : START;
                         break;
                     case C_RECEIVED:
-                        state = (byte == BCC1_DISC) ? BCC1_OK : START;
+                        state = (byte == BCC1_DISC) ? BCC1 : START;
                         break;
-                    case BCC1_OK:
-                        state = (byte == FLAG) ? READ : START;
+                    case BCC1:
+                        state = (byte == FLAG) ? STOP : START;
                         break;
                     default:
                         break;

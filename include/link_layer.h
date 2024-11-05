@@ -13,12 +13,11 @@ extern int alarmEnabled;
 typedef enum
 {
     START,
-    READ,
     FLAG_RECEIVED,
     A_RECEIVED,
     C_RECEIVED,
-    BCC1_OK,
     ESC_RECEIVED,
+    BCC1,
     DATA,
     STOP
 } LinkLayerState;

@@ -1,18 +1,11 @@
 // Link layer protocol implementation
-
-#include <fcntl.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <termios.h>
-#include <unistd.h>
-#include <signal.h>
 #include "link_layer.h"
 #include "serial_port.h"
 
 // Constants and Globals
+extern struct timeval start, end;
+double duration;
+
 extern int fd;               
 int alarmEnabled = 0;
 int alarmCount = 0;
@@ -26,6 +19,8 @@ int retransmissions;
 LinkLayerRole role;
 char serialPort[50];
 int baudRate;
+int bytesSent = 0;
+int bytesReceived = 0;
 
 // Alarm function handler
 void alarmHandler(int signal) {
@@ -172,10 +167,8 @@ int llwrite(const unsigned char *buf, int bufSize)
         bcc2 = bcc2 ^ buf[i];
     }
 
-
-    //printf("index: %d\n", index);
     frame[index++] = bcc2;
-    //printf("bcc2: %d \n", bcc2);
+
     frame[index++] = FLAG;
     int stuffedFrameSize = index;
 
@@ -275,8 +268,8 @@ int llwrite(const unsigned char *buf, int bufSize)
         transmission++;
     }
 
-    //free(frame); cant uncomment tis or it fails
-
+    bytesSent += bufSize;
+    //free(frame);
     if (aceite) return frameSize;
     if (rejeitado) printf("[ERROR] Frame rejected, BCC2 mismatch\n");
     
@@ -381,6 +374,7 @@ int llread(unsigned char *packet) {
     bitRx = (bitRx + 1) % 2;
     printf("Received frame with %d bytes\n", packetSize - 1);
 
+    bytesReceived += packetSize - 1;
     return packetSize - 1;  // Return the packet size without the final BCC2 byte
 }
 
@@ -403,7 +397,20 @@ int llclose(int showStatistics) {
                     state = STOP;
                 }
             }
-            if (state == STOP) break;
+            if (state == STOP){
+                //Statistics
+                if (showStatistics) {
+                printf("Transmission statistics:\n");
+                printf("Total number of retransmissions: %d\n", retransmissions);
+                printf("Total number of timeouts: %d\n", alarmCount);
+                printf("Total number of bytes sent: %d\n", bytesSent);
+                gettimeofday(&end, NULL);
+                duration = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1e6;
+                printf("Total transmission time: %.4f seconds\n", duration);
+                }
+
+                break;
+            }
         }
     } else if (role == LlRx) {
         // Wait for DISC and send UA
@@ -418,6 +425,11 @@ int llclose(int showStatistics) {
                     state = STOP;
                 }
             }
+        }
+        // Statistics
+        if (showStatistics) {
+            printf("Transmission statistics:\n");
+            printf("Total number of bytes received: %d\n", bytesReceived);
         }
         unsigned char uaFrame[5] = {FLAG, Aread, CUA, BCC1r, FLAG};
         write(fd, uaFrame, 5);

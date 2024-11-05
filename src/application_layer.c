@@ -9,10 +9,12 @@
 
 LinkLayer connectionParameters;
 int sequence = 0;
+struct timeval start, end;
 
 void applicationLayer(const char *serialPort, const char *role, int baudRate,
                       int nTries, int timeout, const char *filename)
 {
+    gettimeofday(&start, NULL);
     // Set connection parameters
     strcpy(connectionParameters.serialPort, serialPort);
     connectionParameters.role = (strcmp(role, "tx") == 0) ? LlTx : LlRx;

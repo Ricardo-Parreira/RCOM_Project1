@@ -135,22 +135,19 @@ int llopen(LinkLayer connectionParameters) {
 // LLWRITE
 ////////////////////////////////////////////////
 
-int llwrite(const unsigned char *buf, int bufSize)
-{
-    unsigned char frame[MAX_FRAME_SIZE*2+6];
+int llwrite(const unsigned char *buf, int bufSize) {
+    unsigned char frame[MAX_FRAME_SIZE * 2 + 6];
     int frameSize = bufSize + 6;
-    //unsigned char *frame = (unsigned char*) malloc(frameSize);
+
     frame[0] = FLAG;
     frame[1] = Awrite;
     frame[2] = C_I(bitTx);
     frame[3] = frame[1] ^ frame[2];
 
-
+    // Signal handler for timeout
     signal(SIGALRM, alarmHandler);
 
-
-
-    //STUFFING (swapping 0x7E for 0x7D 0x5E and 0x7D for 0x7D 0x5D)
+    // Stuffing the frame
     int index = 4;
     for (int i = 0; i < bufSize; i++) {
         if (buf[i] == FLAG || buf[i] == ESCAPE_BYTE) {
@@ -161,118 +158,74 @@ int llwrite(const unsigned char *buf, int bufSize)
         }
     }
 
-    //calcula o bcc2
-    u_int8_t bcc2 = buf[0];
-    for(int i = 1; i< bufSize; i++){
-        bcc2 = bcc2 ^ buf[i];
+    // Calculate BCC2
+    unsigned char bcc2 = buf[0];
+    for (int i = 1; i < bufSize; i++) {
+        bcc2 ^= buf[i];
     }
-
     frame[index++] = bcc2;
-
     frame[index++] = FLAG;
     int stuffedFrameSize = index;
 
-    /*printf("[DEBUG] frame \n");
-    for (int i = 0; i < stuffedFrameSize; i++) {
-        
-        printf("%02X ", frame[i]);
-    }*/
-
-    int aceite = 0;
-    int rejeitado = 0;
-    int transmission = 0;
-    
-    while (transmission < retransmissions) {
+    int retries = 0;
+    while (retries < retransmissions) {
         alarmEnabled = 0;
-        alarm(timeout);
+        alarm(timeout);  // Start the timeout timer
         if (write(fd, frame, stuffedFrameSize) == -1) { // Error on write
             if (reconnectSerialPort(serialPort, baudRate) == -1) {
                 return -1;  // Return error if reconnection fails
             }
             continue;  // Retry sending after reconnecting
         }
-        aceite = 0;
-        rejeitado = 0;
 
-        while (!alarmEnabled && !rejeitado && !aceite) {
-            write(fd, frame, stuffedFrameSize);
-            unsigned char byte, cByte = 0;
-    LinkLayerState state = START;
+        unsigned char byte;
+        int receivedRR = 0;
+        int receivedREJ = 0;
+        LinkLayerState state = START;
 
-    while (state != STOP && alarmEnabled == FALSE) {  
-        check = read(fd, &byte, 1);
-        if (check > 0) {
-            //printf("byte: %02X \n", byte);
-            switch (state) {
-                case START:
-                    if (byte == FLAG) state = FLAG_RECEIVED;
-                    break;
-
-                case FLAG_RECEIVED:
-                    if (byte == Aread) state = A_RECEIVED;
-                    else if (byte != FLAG) state = START;
-                    break;
-
-                case A_RECEIVED:
-                    if ((byte == C_RR(bitTx)) | (byte == C_REJ(bitTx))) {
-                        state = C_RECEIVED;
-                        
-                        cByte = byte; // Store the control byte
-                    } else if (byte == FLAG) {
-                        state = FLAG_RECEIVED;
-                    } else {
-                        state = START;
-                    }
-                    break;
-
-                case C_RECEIVED:
-                    
-                    if (byte == (Aread ^ cByte)) {
-                        state = BCC1;
-                    } else if (byte == FLAG) {
-                        state = FLAG_RECEIVED;
-                    } else {
-                        state = START;
-                    }
-                    break;
-
-                case BCC1:
-                //printf("a puta passou \n");
-                    if (byte == FLAG) {
-                        state = STOP;
-                    } else {
-                        state = START;
-                    }
-                    break;
-
-                default:
-                    break;
+        // Wait for acknowledgment or rejection
+        while (!alarmEnabled && !receivedREJ && !receivedRR) {
+            if (read(fd, &byte, 1) > 0) {
+                switch (state) {
+                    case START:
+                        state = (byte == FLAG) ? FLAG_RECEIVED : START;
+                        break;
+                    case FLAG_RECEIVED:
+                        state = (byte == Aread) ? A_RECEIVED : (byte == FLAG ? FLAG_RECEIVED : START);
+                        break;
+                    case A_RECEIVED:
+                        if (byte == C_RR(bitTx)) {
+                            receivedRR = 1;
+                            state = STOP;
+                        } else if (byte == C_REJ(bitTx)) {
+                            receivedREJ = 1;
+                            state = STOP;
+                        } else {
+                            state = START;
+                        }
+                        break;
+                    default:
+                        break;
+                }
             }
         }
-        else if (check == -1){
-            printf("Error reading from serial port opening in llwrite\n");
-            openSerialPort(serialPort, baudRate);
+
+        if (receivedRR) {
+            bitTx = (bitTx + 1) % 2;  // Toggle sequence number
+            bytesSent += bufSize;
+            return stuffedFrameSize;  // Successfully sent
+        } else if (receivedREJ) {
+            printf("Received REJ, retransmitting...\n");
+            retries++;  // Increment retry count
+            alarmEnabled = 0;  // Reset alarm
+        } else if (alarmEnabled) {
+            printf("Timeout occurred, retransmitting...\n");
+            retries++;
         }
-    }
-    //printf("byte passado: %02X \n", cByte);
-            if (cByte == C_REJ(bitTx)) {
-                rejeitado = 1;
-            } else if (cByte == C_RR(bitTx)) {
-                aceite = 1;
-                bitTx = (bitTx + 1) % 2;
-            } else {
-                continue;
-            }
-        }
-        if (aceite) break;
-        transmission++;
     }
 
-    bytesSent += bufSize;
-    //free(frame);
-    if (aceite) return frameSize;
-    if (rejeitado) printf("[ERROR] Frame rejected, BCC2 mismatch\n");
-    
+    // If we exceed max retries, indicate failure
+    printf("Transmission failed after %d attempts.\n", retries);
     return -1;
 }
 

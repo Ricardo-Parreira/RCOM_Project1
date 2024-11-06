@@ -113,8 +113,8 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         while (1) {
             packetSize = llread(packet);
             if (packetSize == -1) {
-                perror("Error reading packet");
-                break;
+                //skip to the next iteration
+                continue;
             }
 
             if (packet[0] == 1) {

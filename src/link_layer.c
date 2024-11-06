@@ -169,6 +169,7 @@ int llwrite(const unsigned char *buf, int bufSize) {
 
     int retries = 0;
     while (retries < retransmissions) {
+
         alarmEnabled = 0;
         alarm(timeout);  // Start the timeout timer
         if (write(fd, frame, stuffedFrameSize) == -1) { // Error on write
@@ -176,6 +177,9 @@ int llwrite(const unsigned char *buf, int bufSize) {
                 return -1;  // Return error if reconnection fails
             }
             continue;  // Retry sending after reconnecting
+        }
+        else{
+            printf("Sent frame with %d bytes\n", stuffedFrameSize);
         }
 
         unsigned char byte;

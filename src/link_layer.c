@@ -21,15 +21,14 @@ char serialPort[50];
 int baudRate;
 int bytesSent = 0;
 int bytesReceived = 0;
+int rejectedFrames = 0;
 
-// Alarm function handler
 void alarmHandler(int signal) {
     alarmEnabled = 1; // Timer timeout flag
     alarmCount++;
     printf("Timeout %d\n", alarmCount);
 }
 
-// Initialize connection parameters
 void setConnectionParameters(LinkLayer connectionParameters) {
     timeout = connectionParameters.timeout;
     retransmissions = connectionParameters.nRetransmissions;
@@ -40,8 +39,8 @@ void setConnectionParameters(LinkLayer connectionParameters) {
 }
 
 int reconnectSerialPort(const char* serialPort, int baudRate) {
-    closeSerialPort(fd);  // Close existing file descriptor
-    fd = openSerialPort(serialPort, baudRate);  // Attempt to reopen
+    closeSerialPort(fd);  
+    fd = openSerialPort(serialPort, baudRate);  
     return (fd < 0) ? -1 : 0;
 }
 
@@ -57,15 +56,13 @@ int llopen(LinkLayer connectionParameters) {
     setConnectionParameters(connectionParameters);
     if (fd < 0) return -1;
 
-    // Configure signal handler for retransmission
     signal(SIGALRM, alarmHandler);
 
     if (role == LlTx) {
-        // Transmitter: send SET and wait for UA
         while (retransmissions > 0) {
             unsigned char supFrame[5] = {FLAG, Awrite, CSet, BCC1w, FLAG};
             write(fd, supFrame, 5);
-            alarm(timeout);  // Start timer
+            alarm(timeout);
             alarmEnabled = 0;
 
             while (!alarmEnabled && state != STOP) {
@@ -95,10 +92,9 @@ int llopen(LinkLayer connectionParameters) {
             if (state == STOP) return fd; // Successful connection
             retransmissions--;
         }
-        return -1;  // Failed to connect as transmitter
+        return -1;  // Failed
 
     } else if (role == LlRx) {
-        // Receiver: wait for SET, then reply with UA
         while (state != STOP) {
             unsigned char byte;
             if (read(fd, &byte, 1) > 0) {
@@ -144,10 +140,9 @@ int llwrite(const unsigned char *buf, int bufSize) {
     frame[2] = C_I(bitTx);
     frame[3] = frame[1] ^ frame[2];
 
-    // Signal handler for timeout
     signal(SIGALRM, alarmHandler);
 
-    // Stuffing the frame
+    // Stuffing 
     int index = 4;
     for (int i = 0; i < bufSize; i++) {
         if (buf[i] == FLAG || buf[i] == ESCAPE_BYTE) {
@@ -171,12 +166,12 @@ int llwrite(const unsigned char *buf, int bufSize) {
     while (retries < retransmissions) {
 
         alarmEnabled = 0;
-        alarm(timeout);  // Start the timeout timer
-        if (write(fd, frame, stuffedFrameSize) == -1) { // Error on write
+        alarm(timeout);
+        if (write(fd, frame, stuffedFrameSize) == -1) {
             if (reconnectSerialPort(serialPort, baudRate) == -1) {
-                return -1;  // Return error if reconnection fails
+                return -1;
             }
-            continue;  // Retry sending after reconnecting
+            continue;  //Retry sending after reconnecting
         }
         else{
             printf("Sent frame with %d bytes\n", stuffedFrameSize);
@@ -215,20 +210,20 @@ int llwrite(const unsigned char *buf, int bufSize) {
         }
 
         if (receivedRR) {
-            bitTx = (bitTx + 1) % 2;  // Toggle sequence number
+            bitTx = (bitTx + 1) % 2;
             bytesSent += bufSize;
-            return stuffedFrameSize;  // Successfully sent
+            return stuffedFrameSize;
         } else if (receivedREJ) {
             printf("Received REJ, retransmitting...\n");
-            retries++;  // Increment retry count
-            alarmEnabled = 0;  // Reset alarm
+            rejectedFrames++;
+            retries++;
+            alarmEnabled = 0;
         } else if (alarmEnabled) {
             printf("Timeout occurred, retransmitting...\n");
             retries++;
         }
     }
 
-    // If we exceed max retries, indicate failure
     printf("Transmission failed after %d attempts.\n", retries);
     return -1;
 }
@@ -239,10 +234,10 @@ int llwrite(const unsigned char *buf, int bufSize) {
 
 int llread(unsigned char *packet) {
     int state = START;
-    int packetSize = 0;  // Size of the destuffed data in packet
-    int maxRetries = 3;  // Maximum reconnection attempts
+    int packetSize = 0;
+    int maxRetries = 3;
 
-    // State machine to receive a full frame and perform destuffing on the fly
+    // State machine to receive a full frame and perform destuffing inside it
     while (state != STOP) {
         unsigned char byte;
         int check = read(fd, &byte, 1);
@@ -286,7 +281,6 @@ int llread(unsigned char *packet) {
                     break;
             }
         } else if (check == -1) {
-            // Error reading from serial port - attempt reconnection
             printf("Error reading from serial port, attempting reconnection...\n");
             closeSerialPort(fd);
 
@@ -317,7 +311,7 @@ int llread(unsigned char *packet) {
         bcc2 ^= packet[i];
     }
 
-    // BCC2 verification: Compare calculated BCC2 to the last byte in the frame buffer
+    // BCC2 verification
     if (bcc2 != packet[packetSize - 1]) {
         unsigned char rejFrame[5] = {FLAG, Aread, C_REJ(bitRx), Aread ^ C_REJ(bitRx), FLAG};
         write(fd, rejFrame, 5);
@@ -332,7 +326,7 @@ int llread(unsigned char *packet) {
     printf("Received frame with %d bytes\n", packetSize - 1);
 
     bytesReceived += packetSize - 1;
-    return packetSize - 1;  // Return the packet size without the final BCC2 byte
+    return packetSize - 1;
 }
 
 
@@ -358,9 +352,10 @@ int llclose(int showStatistics) {
                 //Statistics
                 if (showStatistics) {
                 printf("Transmission statistics:\n");
-                printf("Total number of retransmissions: %d\n", retransmissions);
-                printf("Total number of timeouts: %d\n", alarmCount);
-                printf("Total number of bytes sent: %d\n", bytesSent);
+                printf("Retransmissions: %d\n", retransmissions);
+                printf("Timeouts: %d\n", alarmCount);
+                printf("Number of bytes sent: %d\n", bytesSent);
+                printf("Rejected frames: %d\n", rejectedFrames);
                 gettimeofday(&end, NULL);
                 duration = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1e6;
                 printf("Total transmission time: %.4f seconds\n", duration);

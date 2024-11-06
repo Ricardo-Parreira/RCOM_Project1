@@ -46,22 +46,18 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         int fileSize = ftell(file);
         fseek(file, 0, SEEK_SET);
 
-        // Initialize bytesUnsent with the full file size
         int bytesUnsent = fileSize;
 
         // Send start control packet
         int startPacketSize;
-        //const char *fileName = NULL;
-        unsigned char *startPacket = buildControlPacket(1, fileSize, filename, &startPacketSize);
+        unsigned char *startPacket = buildControlPacket(1, fileSize, filename, &startPacketSize); //1 for start
         printf("fileName: %s\n", filename);
         if (llwrite(startPacket, startPacketSize) == -1) {
             perror("Error sending start packet");
-            //free(startPacket);
             fclose(file);
             llclose(fd);
             return;
         }
-        //free(startPacket);
 
         // Send file data in chunks of up to 512 bytes
         unsigned char dataBuffer[MAX_FRAME_SIZE];
@@ -77,13 +73,11 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             unsigned char *dataPacket = buildDataPacket(dataBuffer, bytesRead, &packetSize);
             if (llwrite(dataPacket, packetSize) == -1) {
                 perror("Error sending data packet");
-                //free(dataPacket);
                 fclose(file);
                 llclose(fd);
                 return;
             }
 
-            //free(dataPacket);
             bytesUnsent -= bytesRead;
             printf("Sent %d bytes, %d bytes remaining\n", bytesRead, bytesUnsent);
         }
@@ -94,7 +88,6 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
         if (llwrite(endPacket, endPacketSize) == -1) {
             perror("Error sending end packet");
         }
-        //free(endPacket);
 
         fclose(file);
         printf("File transmission completed\n");
@@ -114,6 +107,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             packetSize = llread(packet);
             if (packetSize == -1) {
                 //skip to the next iteration
+                //é isto que nos permite que volte a tenatar depois de o bcc2 dar mal
                 continue;
             }
 
@@ -128,7 +122,6 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
                 memcpy(buffer, &packet[4], payloadSize);
 
                 fwrite(buffer, 1, packetSize - 6, file); 
-                //free(buffer);
                 printf("Data packet received and written\n");
             } else if (packet[0] == 3) {
                 // End packet received

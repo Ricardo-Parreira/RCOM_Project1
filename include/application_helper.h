@@ -4,10 +4,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <termios.h>
 #include "link_layer.h"
 
-unsigned char * parseControl(const unsigned int c, const char* filename, long int length, unsigned int* size);
-unsigned char * openFile(FILE* fd, long int fileLength);
-void removeHeaderData(const unsigned char* packet, const unsigned int packetSize, unsigned char* buffer);
+unsigned char* buildDataPacket(const unsigned char* data, int dataSize, int* packetSize);
+unsigned char* buildControlPacket(int controlType, int fileSize, const char* fileName, int* packetSize);
+int initializeConnection(LinkLayer* connectionParams);
 
-#endif // APPLICATION_HELPER_H
+#endif

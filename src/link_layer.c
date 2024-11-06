@@ -30,12 +30,38 @@ void alarmHandler(int signal) {
 }
 
 void setConnectionParameters(LinkLayer connectionParameters) {
+    struct termios newtio;
+
     timeout = connectionParameters.timeout;
     retransmissions = connectionParameters.nRetransmissions;
     role = connectionParameters.role;
     strcpy(serialPort, connectionParameters.serialPort);
     baudRate = connectionParameters.baudRate;
+
     fd = openSerialPort(connectionParameters.serialPort, connectionParameters.baudRate);
+    if (fd < 0) {
+        perror("Error opening serial port");
+        exit(-1);
+    }
+
+    // Configure the serial port settings in termios
+    memset(&newtio, 0, sizeof(newtio));
+    newtio.c_cflag = connectionParameters.baudRate | CS8 | CLOCAL | CREAD; 
+    newtio.c_iflag = IGNPAR;  // Ignore parity errors
+    newtio.c_oflag = 0;       // No output processing
+    newtio.c_lflag = 0;       // Non-canonical mode
+
+    // Set VMIN and VTIME for non-canonical read
+    newtio.c_cc[VTIME] = connectionParameters.timeout * 10; // Timeout in tenths of a second
+    newtio.c_cc[VMIN] = 0; // Minimum number of characters to read
+
+    // Apply configuration to the serial port
+    tcflush(fd, TCIFLUSH);
+    if (tcsetattr(fd, TCSANOW, &newtio) != 0) {
+        perror("Error setting serial port attributes");
+        close(fd);
+        exit(-1);
+    }
 }
 
 int reconnectSerialPort(const char* serialPort, int baudRate) {
@@ -133,7 +159,7 @@ int llopen(LinkLayer connectionParameters) {
 
 int llwrite(const unsigned char *buf, int bufSize) {
     unsigned char frame[MAX_FRAME_SIZE * 2 + 6];
-    int frameSize = bufSize + 6;
+    //int frameSize = bufSize + 6;
 
     frame[0] = FLAG;
     frame[1] = Awrite;
@@ -352,10 +378,10 @@ int llclose(int showStatistics) {
                 //Statistics
                 if (showStatistics) {
                 printf("Transmission statistics:\n");
-                printf("Retransmissions: %d\n", retransmissions);
+                printf("Retransmissions left: %d\n", retransmissions);
                 printf("Timeouts: %d\n", alarmCount);
                 printf("Number of bytes sent: %d\n", bytesSent);
-                printf("Rejected frames: %d\n", rejectedFrames);
+                printf("Rejected frames that were sent again: %d\n", rejectedFrames);
                 gettimeofday(&end, NULL);
                 duration = (end.tv_sec - start.tv_sec) + (end.tv_usec - start.tv_usec) / 1e6;
                 printf("Total transmission time: %.4f seconds\n", duration);

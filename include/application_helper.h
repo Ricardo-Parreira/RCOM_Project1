@@ -11,6 +11,5 @@
 
 unsigned char* buildDataPacket(const unsigned char* data, int dataSize, int* packetSize);
 unsigned char* buildControlPacket(int controlType, int fileSize, const char* fileName, int* packetSize);
-int initializeConnection(LinkLayer* connectionParams);
 
 #endif

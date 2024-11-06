@@ -39,35 +39,3 @@ unsigned char* buildControlPacket(int controlType, int fileSize, const char* fil
     return packet;
 }
 
-int initializeConnection(LinkLayer* connectionParams) {
-    int fd = open(connectionParams->serialPort, O_RDWR | O_NOCTTY);
-    if (fd < 0) {
-        perror("ERROR opening serial port");
-        return -1;
-    }
-
-    struct termios newtio;
-    memset(&newtio, 0, sizeof(newtio));
-
-    cfsetispeed(&newtio, connectionParams->baudRate);
-    cfsetospeed(&newtio, connectionParams->baudRate);
-    newtio.c_cflag = connectionParams->baudRate | CS8 | CLOCAL | CREAD;
-
-    newtio.c_iflag = IGNPAR;
-    newtio.c_oflag = 0;
-
-    // Set non-canonical mode and timeout
-    newtio.c_lflag = 0;
-    newtio.c_cc[VTIME] = connectionParams->timeout * 10; // Convert seconds to tenths of seconds
-    newtio.c_cc[VMIN] = 0; //minimum number of characters to read (if it wasnt like this it would be stuck on a loop)
-
-    // Apply configuration to the serial port
-    tcflush(fd, TCIFLUSH);
-    if (tcsetattr(fd, TCSANOW, &newtio) != 0) {
-        perror("ERROR setting serial port attributes");
-        close(fd);
-        return -1;
-    }
-
-    return fd;
-}
